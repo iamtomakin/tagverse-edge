@@ -642,7 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loginButton.addEventListener('click', () => {
       const supaClient = initSupabase();
       if (!supaClient) {
-        alert('Supabase is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY.');
+        alert('Supabase anon key is missing. In index.html set window.SUPABASE_ANON_KEY to your key from Supabase Dashboard → Settings → API → anon public, then redeploy.');
         return;
       }
       supaClient.auth.signInWithOAuth({ provider: 'google' });
