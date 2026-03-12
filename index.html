@@ -21,10 +21,28 @@
       </nav>
       <div class="auth-bar" aria-live="polite">
         <span id="authStatus" class="auth-status">Not signed in</span>
-        <button type="button" id="loginButton" class="auth-btn">Sign in with Google</button>
+        <button type="button" id="loginButton" class="auth-btn">Sign in with email</button>
         <button type="button" id="logoutButton" class="auth-btn" hidden>Sign out</button>
       </div>
     </header>
+
+    <!-- Auth modal: Sign in with email (magic link) -->
+    <div id="authModal" class="log-modal" role="dialog" aria-label="Sign in with email" hidden>
+      <div class="log-modal-backdrop" id="authModalBackdrop"></div>
+      <div class="log-modal-content">
+        <h2>Sign in with email</h2>
+        <p class="log-modal-instrument">Enter your email and we’ll send you a sign-in link.</p>
+        <div class="log-modal-section">
+          <label for="authEmail" class="log-modal-label">Email</label>
+          <input type="email" id="authEmail" class="auth-email-input" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <p id="authModalMessage" class="log-modal-comparison" hidden></p>
+        <div class="log-modal-actions">
+          <button type="button" id="authModalSend" class="log-modal-cancel">Send link</button>
+          <button type="button" id="authModalCancel" class="log-modal-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Screen 1: Calendar dashboard (home) -->
     <main id="screen-calendar" class="screen active" role="main">
@@ -174,7 +192,7 @@
         </div>
         <div class="settings-section">
           <h3 class="settings-subtitle">Account</h3>
-          <p class="settings-meta" id="settingsAccountMeta">Sign in with Google to sync your data.</p>
+          <p class="settings-meta" id="settingsAccountMeta">Sign in with email to sync your data.</p>
         </div>
       </div>
     </main>

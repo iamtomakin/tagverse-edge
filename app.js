@@ -356,7 +356,7 @@ function updateAuthUI() {
     statusEl.textContent = 'Not signed in';
     loginButton.hidden = false;
     logoutButton.hidden = true;
-    if (accountMeta) accountMeta.textContent = 'Sign in with Google to sync your data.';
+    if (accountMeta) accountMeta.textContent = 'Sign in with email to sync your data.';
   }
 }
 
@@ -638,16 +638,65 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loginButton = document.getElementById('loginButton');
   const logoutButton = document.getElementById('logoutButton');
-  if (loginButton) {
-    loginButton.addEventListener('click', () => {
-      const supaClient = initSupabase();
-      if (!supaClient) {
-        alert('Supabase anon key is missing. In index.html set window.SUPABASE_ANON_KEY to your key from Supabase Dashboard → Settings → API → anon public, then redeploy.');
+  const authModal = document.getElementById('authModal');
+  const authModalBackdrop = document.getElementById('authModalBackdrop');
+  const authEmail = document.getElementById('authEmail');
+  const authModalMessage = document.getElementById('authModalMessage');
+  const authModalSend = document.getElementById('authModalSend');
+  const authModalCancel = document.getElementById('authModalCancel');
+
+  if (loginButton) loginButton.textContent = 'Sign in with email';
+
+  function openAuthModal() {
+    const supaClient = initSupabase();
+    if (!supaClient) {
+      alert('Supabase anon key is missing. In index.html set window.SUPABASE_ANON_KEY to your key from Supabase Dashboard → Settings → API → anon public, then redeploy.');
+      return;
+    }
+    if (authModal) {
+      authModal.hidden = false;
+      if (authEmail) authEmail.value = '';
+      if (authModalMessage) { authModalMessage.hidden = true; authModalMessage.textContent = ''; }
+      authEmail?.focus();
+    }
+  }
+
+  function closeAuthModal() {
+    if (authModal) authModal.hidden = true;
+  }
+
+  if (loginButton) loginButton.addEventListener('click', openAuthModal);
+  if (authModalBackdrop) authModalBackdrop.addEventListener('click', closeAuthModal);
+  if (authModalCancel) authModalCancel.addEventListener('click', closeAuthModal);
+
+  if (authModalSend) {
+    authModalSend.addEventListener('click', async () => {
+      const email = authEmail?.value?.trim();
+      if (!email) {
+        if (authModalMessage) { authModalMessage.textContent = 'Please enter your email.'; authModalMessage.hidden = false; }
         return;
       }
-      supaClient.auth.signInWithOAuth({ provider: 'google' });
+      const supaClient = initSupabase();
+      if (!supaClient) return;
+      authModalSend.disabled = true;
+      if (authModalMessage) { authModalMessage.textContent = 'Sending…'; authModalMessage.hidden = false; }
+      const { error } = await supaClient.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin + (window.location.pathname || '/') }
+      });
+      authModalSend.disabled = false;
+      if (error) {
+        if (authModalMessage) { authModalMessage.textContent = error.message; authModalMessage.hidden = false; }
+        return;
+      }
+      if (authModalMessage) {
+        authModalMessage.textContent = 'Check your email for the sign-in link.';
+        authModalMessage.hidden = false;
+      }
+      setTimeout(closeAuthModal, 3000);
     });
   }
+
   if (logoutButton) {
     logoutButton.addEventListener('click', async () => {
       const supaClient = initSupabase();

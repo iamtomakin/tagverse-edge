@@ -29,14 +29,69 @@
 html.theme-light {
   --bg-primary: #f5f5f5;
   --cell-default: #e8e8e8;
+  --cell-default-hover: #d5d5d5;
   --text-primary: #1a1a1a;
   --text-secondary: #555;
   --today-btn-bg: #ccc;
+  --loss-bg: #e8c4c2;
+  --loss-bg-cell: #e8c4c2;
+  --loss-bg-hover: #dfb0ae;
+  --profit-bg: #b8d4b8;
+  --profit-bg-hover: #a8c8a8;
 }
 
 html.theme-light .log-modal-content,
 html.theme-light .month-picker {
   --cell-default: #e8e8e8;
+}
+
+/* Primary buttons and active states: white text on blue in light mode */
+html.theme-light .auth-btn,
+html.theme-light .log-today-btn,
+html.theme-light .instrument-pill.selected,
+html.theme-light .period-btn.active,
+html.theme-light .share-generate-btn {
+  color: #fff;
+}
+
+html.theme-light .calendar-cell.selected .date-num {
+  color: #fff;
+}
+
+/* Instrument pills: visible border on light background */
+html.theme-light .instrument-pill {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+html.theme-light .instrument-pill:hover {
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+/* Period buttons hover in light mode */
+html.theme-light .period-btn:hover {
+  background: var(--cell-default-hover);
+}
+
+/* Nav and picker hovers: dark overlay on light bg */
+html.theme-light .nav-tab:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+html.theme-light .month-picker-year:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+html.theme-light .month-picker-month:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+html.theme-light .month-picker-month.selected {
+  color: #fff;
+}
+
+html.theme-light .month-picker-today:hover,
+html.theme-light .today-btn:hover {
+  background: #bbb;
 }
 
 * {
@@ -104,6 +159,34 @@ body {
 .nav-tab.active {
   color: var(--text-primary);
   background: var(--cell-default);
+}
+
+.auth-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.auth-status {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.auth-btn {
+  background: var(--selected-border);
+  color: var(--bg-primary);
+  border: none;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity var(--transition-ease);
+  font-family: inherit;
+}
+
+.auth-btn:hover {
+  opacity: 0.9;
 }
 
 .screen {
@@ -364,6 +447,17 @@ body {
 
 .log-modal-cancel:hover {
   color: var(--text-primary);
+}
+
+.auth-email-input {
+  width: 100%;
+  max-width: 280px;
+  background: var(--cell-default);
+  color: var(--text-primary);
+  border: 1px solid var(--bg-primary);
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
 }
 
 /* Analytics screen */
@@ -855,7 +949,7 @@ body {
 
 /* Loss day */
 .calendar-cell.loss {
-  background: #552326;
+  background: var(--loss-bg);
 }
 
 .calendar-cell.loss:hover {
@@ -925,7 +1019,7 @@ body {
 }
 
 .week-cell.loss {
-  background: #552326;
+  background: var(--loss-bg);
 }
 
 .week-cell.loss:hover {
