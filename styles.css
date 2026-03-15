@@ -205,6 +205,70 @@ body {
   margin: 0 auto;
 }
 
+.strategy-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.strategy-bar-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.strategy-pills {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.strategy-pill {
+  background: var(--cell-default);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color var(--transition-ease), border-color var(--transition-ease), color var(--transition-ease);
+}
+
+.strategy-pill:hover {
+  background: var(--cell-default-hover);
+}
+
+.strategy-pill.selected {
+  background: var(--selected-border);
+  color: var(--bg-primary);
+  border-color: var(--selected-border);
+}
+
+.strategy-add-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.strategy-add-btn:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+html.theme-light .strategy-pill {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+html.theme-light .strategy-pill.selected {
+  color: #fff;
+}
+
 .declaration-banner {
   display: flex;
   align-items: center;
@@ -545,6 +609,55 @@ body {
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
+}
+
+.analytics-compare {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--cell-default);
+}
+
+.analytics-compare-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.compare-strategy-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.compare-strategy-checkboxes label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.compare-strategy-table {
+  overflow-x: auto;
+}
+
+.compare-strategy-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.compare-strategy-table th,
+.compare-strategy-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--cell-default);
+}
+
+.compare-strategy-table th {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 /* Share screen */

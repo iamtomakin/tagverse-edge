@@ -65,6 +65,11 @@
             <span id="disciplineScore" class="score">Score: —</span>
           </p>
         </header>
+        <div class="strategy-bar" role="group" aria-label="Strategy">
+          <span class="strategy-bar-label">Strategy</span>
+          <div id="strategyPills" class="strategy-pills"></div>
+          <button type="button" id="addStrategyBtn" class="strategy-add-btn">+ Add strategy</button>
+        </div>
         <div id="declarationBanner" class="declaration-banner" hidden>
           <div class="instrument-pills" role="group" aria-label="Trade instrument">
             <button type="button" class="instrument-pill selected" data-instrument="NQ" aria-pressed="true">NQ</button>
@@ -164,6 +169,11 @@
           <dt>Total R</dt>
           <dd id="metricTotalR">—</dd>
         </dl>
+        <section class="analytics-compare" aria-label="Compare strategies">
+          <h3 class="analytics-compare-title">Compare strategies</h3>
+          <div id="compareStrategyCheckboxes" class="compare-strategy-checkboxes"></div>
+          <div id="compareStrategyTable" class="compare-strategy-table" hidden></div>
+        </section>
       </div>
     </main>
 

@@ -2,7 +2,9 @@
  * Tagverse Edge — Calendar, declarations, log modal, analytics, share, settings
  */
 
-const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode' };
+const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy' };
+
+const STRATEGY_DEFAULT_ID = 'default';
 
 const MODES = { BACKTEST: 'backtest', LIVE: 'live' };
 
@@ -42,6 +44,56 @@ function saveCurrentMode(mode) {
 
 const INSTRUMENTS = ['NQ', 'YM', 'GC', 'ES'];
 const DEFAULT_INSTRUMENT = 'NQ';
+
+function isFlatShape(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  const first = Object.keys(obj)[0];
+  return first && /^\d{4}-\d{2}-\d{2}$/.test(first);
+}
+
+function loadStrategies() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.strategies);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (_) {}
+  return [{ id: STRATEGY_DEFAULT_ID, name: 'Default' }];
+}
+
+function saveStrategies(list) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.strategies, JSON.stringify(list));
+  } catch (_) {}
+}
+
+function loadSelectedStrategyId() {
+  try {
+    const v = localStorage.getItem(STORAGE_KEYS.selectedStrategy);
+    const list = loadStrategies();
+    if (list.some((s) => s.id === v)) return v;
+  } catch (_) {}
+  return STRATEGY_DEFAULT_ID;
+}
+
+function saveSelectedStrategyId(id) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.selectedStrategy, id);
+  } catch (_) {}
+}
+
+function createStrategy(name) {
+  const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+  const list = loadStrategies();
+  list.push({ id, name: (name || 'Strategy').trim() || 'Strategy' });
+  saveStrategies(list);
+  saveSelectedStrategyId(id);
+  return id;
+}
+
+let strategies = loadStrategies();
+let selectedStrategyId = loadSelectedStrategyId();
 
 function isLegacyDailyEntry(v) {
   return v && typeof v === 'object' && 'totalR' in v && typeof v.totalR === 'number' && !INSTRUMENTS.some((i) => i in v);
@@ -116,15 +168,24 @@ function loadDailyResults() {
     const raw = localStorage.getItem(STORAGE_KEYS.dailyResults);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (typeof parsed === 'object' && parsed !== null && Object.keys(parsed).length > 0) {
-        const migrated = migrateDailyResults(parsed);
-        if (migrated !== parsed) saveDailyResults(migrated);
-        return migrated;
+      if (typeof parsed === 'object' && parsed !== null) {
+        if (isFlatShape(parsed)) {
+          const migrated = migrateDailyResults(parsed);
+          const nested = { [STRATEGY_DEFAULT_ID]: migrated };
+          saveDailyResults(nested);
+          return nested;
+        }
+        const out = {};
+        for (const stratId of Object.keys(parsed)) {
+          const inner = parsed[stratId];
+          if (typeof inner === 'object' && inner !== null) out[stratId] = migrateDailyResults(inner);
+          else out[stratId] = {};
+        }
+        if (Object.keys(out).length > 0) return out;
       }
-      return getInitialDailyResults();
     }
   } catch (_) {}
-  return getInitialDailyResults();
+  return { [STRATEGY_DEFAULT_ID]: getInitialDailyResults() };
 }
 
 function loadDeclarations() {
@@ -133,14 +194,23 @@ function loadDeclarations() {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (typeof parsed === 'object' && parsed !== null) {
-        const migrated = migrateDeclarations(parsed);
-        if (migrated !== parsed) saveDeclarations(migrated);
-        return migrated;
+        if (isFlatShape(parsed)) {
+          const migrated = migrateDeclarations(parsed);
+          const nested = { [STRATEGY_DEFAULT_ID]: migrated };
+          saveDeclarations(nested);
+          return nested;
+        }
+        const out = {};
+        for (const stratId of Object.keys(parsed)) {
+          const inner = parsed[stratId];
+          if (typeof inner === 'object' && inner !== null) out[stratId] = migrateDeclarations(inner);
+          else out[stratId] = {};
+        }
+        return out;
       }
-      return {};
     }
   } catch (_) {}
-  return {};
+  return { [STRATEGY_DEFAULT_ID]: {} };
 }
 
 function saveDailyResults(data) {
@@ -158,13 +228,15 @@ function saveDeclarations(data) {
 async function fetchDailyResultsFromSupabase(userId) {
   const supa = initSupabase();
   if (!supa) return {};
-  const { data: rows, error } = await supa.from('daily_results').select('date_key, instrument, total_r, trade_count, trade_1_r').eq('user_id', userId);
+  const { data: rows, error } = await supa.from('daily_results').select('strategy_id, date_key, instrument, total_r, trade_count, trade_1_r').eq('user_id', userId);
   if (error) return {};
   const out = {};
   (rows || []).forEach((r) => {
-    if (!out[r.date_key]) out[r.date_key] = {};
-    out[r.date_key][r.instrument] = { totalR: r.total_r, tradeCount: r.trade_count };
-    if (r.trade_1_r != null) out[r.date_key][r.instrument].trade_1_r = r.trade_1_r;
+    const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
+    if (!out[sid]) out[sid] = {};
+    if (!out[sid][r.date_key]) out[sid][r.date_key] = {};
+    out[sid][r.date_key][r.instrument] = { totalR: r.total_r, tradeCount: r.trade_count };
+    if (r.trade_1_r != null) out[sid][r.date_key][r.instrument].trade_1_r = r.trade_1_r;
   });
   return out;
 }
@@ -172,57 +244,76 @@ async function fetchDailyResultsFromSupabase(userId) {
 async function fetchDeclarationsFromSupabase(userId) {
   const supa = initSupabase();
   if (!supa) return {};
-  const { data: rows, error } = await supa.from('declarations').select('date_key, instrument, trade_count_planned, created_at').eq('user_id', userId);
+  const { data: rows, error } = await supa.from('declarations').select('strategy_id, date_key, instrument, trade_count_planned, created_at').eq('user_id', userId);
   if (error) return {};
   const out = {};
   (rows || []).forEach((r) => {
-    if (!out[r.date_key]) out[r.date_key] = {};
-    out[r.date_key][r.instrument] = { tradeCountPlanned: r.trade_count_planned, createdAt: r.created_at };
+    const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
+    if (!out[sid]) out[sid] = {};
+    if (!out[sid][r.date_key]) out[sid][r.date_key] = {};
+    out[sid][r.date_key][r.instrument] = { tradeCountPlanned: r.trade_count_planned, createdAt: r.created_at };
   });
   return out;
 }
 
-async function persistDayResultToSupabase(userId, dateKey, instrument, entry) {
+async function fetchStrategiesFromSupabase(userId) {
   const supa = initSupabase();
-  if (!supa) return;
-  await supa.from('daily_results').upsert(
-    {
-      user_id: userId,
-      date_key: dateKey,
-      instrument,
-      total_r: entry.totalR,
-      trade_count: entry.tradeCount,
-      trade_1_r: entry.trade_1_r ?? null
-    },
-    { onConflict: 'user_id,date_key,instrument' }
-  );
+  if (!supa) return null;
+  const { data: rows, error } = await supa.from('strategies').select('id, name').eq('user_id', userId).order('created_at');
+  if (error) return null;
+  return (rows || []).map((r) => ({ id: r.id, name: r.name }));
 }
 
-async function persistDeclarationToSupabase(userId, dateKey, instrument, tradeCountPlanned, createdAt) {
+async function insertStrategyToSupabase(userId, id, name) {
   const supa = initSupabase();
   if (!supa) return;
-  await supa.from('declarations').upsert(
-    {
-      user_id: userId,
-      date_key: dateKey,
-      instrument,
-      trade_count_planned: tradeCountPlanned,
-      created_at: createdAt
-    },
-    { onConflict: 'user_id,date_key,instrument' }
-  );
+  if (id === STRATEGY_DEFAULT_ID) return;
+  await supa.from('strategies').insert({ id, user_id: userId, name });
 }
 
-async function deleteDayResultFromSupabase(userId, dateKey, instrument) {
+async function persistDayResultToSupabase(userId, strategyId, dateKey, instrument, entry) {
   const supa = initSupabase();
   if (!supa) return;
-  await supa.from('daily_results').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+  const row = {
+    user_id: userId,
+    date_key: dateKey,
+    instrument,
+    total_r: entry.totalR,
+    trade_count: entry.tradeCount,
+    trade_1_r: entry.trade_1_r ?? null
+  };
+  if (strategyId !== STRATEGY_DEFAULT_ID) row.strategy_id = strategyId;
+  await supa.from('daily_results').upsert(row, { onConflict: 'user_id,date_key,instrument' });
 }
 
-async function deleteDeclarationFromSupabase(userId, dateKey, instrument) {
+async function persistDeclarationToSupabase(userId, strategyId, dateKey, instrument, tradeCountPlanned, createdAt) {
   const supa = initSupabase();
   if (!supa) return;
-  await supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+  const row = {
+    user_id: userId,
+    date_key: dateKey,
+    instrument,
+    trade_count_planned: tradeCountPlanned,
+    created_at: createdAt
+  };
+  if (strategyId !== STRATEGY_DEFAULT_ID) row.strategy_id = strategyId;
+  await supa.from('declarations').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+}
+
+async function deleteDayResultFromSupabase(userId, strategyId, dateKey, instrument) {
+  const supa = initSupabase();
+  if (!supa) return;
+  let q = supa.from('daily_results').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+  if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
+  await q;
+}
+
+async function deleteDeclarationFromSupabase(userId, strategyId, dateKey, instrument) {
+  const supa = initSupabase();
+  if (!supa) return;
+  let q = supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+  if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
+  await q;
 }
 
 let dailyResults = loadDailyResults();
@@ -278,13 +369,16 @@ function isWeekday(date) {
 }
 
 function getDayResult(dateKey, instrument) {
-  const byDate = dailyResults[dateKey];
+  const bucket = dailyResults[selectedStrategyId];
+  if (!bucket) return null;
+  const byDate = bucket[dateKey];
   if (!byDate) return null;
   if (isLegacyDailyEntry(byDate)) {
     const migrated = migrateDailyResults({ [dateKey]: byDate });
-    dailyResults[dateKey] = migrated[dateKey];
+    if (!dailyResults[selectedStrategyId]) dailyResults[selectedStrategyId] = {};
+    dailyResults[selectedStrategyId][dateKey] = migrated[dateKey];
     saveDailyResults(dailyResults);
-    return dailyResults[dateKey][instrument] || null;
+    return dailyResults[selectedStrategyId][dateKey][instrument] || null;
   }
   return byDate[instrument] || null;
 }
@@ -308,13 +402,16 @@ function isSameDay(a, b) {
 }
 
 function getDeclaration(dateKey, instrument) {
-  const byDate = declarations[dateKey];
+  const bucket = declarations[selectedStrategyId];
+  if (!bucket) return null;
+  const byDate = bucket[dateKey];
   if (!byDate) return null;
   if (isLegacyDeclarationEntry(byDate)) {
     const migrated = migrateDeclarations({ [dateKey]: byDate });
-    declarations[dateKey] = migrated[dateKey];
+    if (!declarations[selectedStrategyId]) declarations[selectedStrategyId] = {};
+    declarations[selectedStrategyId][dateKey] = migrated[dateKey];
     saveDeclarations(declarations);
-    return declarations[dateKey][instrument] || null;
+    return declarations[selectedStrategyId][dateKey][instrument] || null;
   }
   return byDate[instrument] || null;
 }
@@ -328,51 +425,59 @@ function formatDeclarationTime(isoString) {
 function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
   const createdAt = new Date().toISOString();
-  const existing = declarations[dateKey];
+  if (!declarations[selectedStrategyId]) declarations[selectedStrategyId] = {};
+  const bucket = declarations[selectedStrategyId];
+  const existing = bucket[dateKey];
   const byInstrument = typeof existing === 'object' && existing !== null && !isLegacyDeclarationEntry(existing) ? { ...existing } : {};
   byInstrument[inst] = { tradeCountPlanned, createdAt };
-  declarations[dateKey] = byInstrument;
+  bucket[dateKey] = byInstrument;
   saveDeclarations(declarations);
-  if (currentUser) persistDeclarationToSupabase(currentUser.id, dateKey, inst, tradeCountPlanned, createdAt);
+  if (currentUser) persistDeclarationToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, tradeCountPlanned, createdAt);
 }
 
 function setDayResult(dateKey, instrument, totalR, tradeCount) {
   const inst = instrument ?? selectedInstrument;
   const entry = { totalR, tradeCount };
   if (tradeCount === 1) entry.trade_1_r = totalR;
-  const existing = dailyResults[dateKey];
+  if (!dailyResults[selectedStrategyId]) dailyResults[selectedStrategyId] = {};
+  const bucket = dailyResults[selectedStrategyId];
+  const existing = bucket[dateKey];
   const byInstrument = typeof existing === 'object' && existing !== null && !isLegacyDailyEntry(existing) ? { ...existing } : {};
   byInstrument[inst] = entry;
-  dailyResults[dateKey] = byInstrument;
+  bucket[dateKey] = byInstrument;
   saveDailyResults(dailyResults);
-  if (currentUser) persistDayResultToSupabase(currentUser.id, dateKey, inst, entry);
+  if (currentUser) persistDayResultToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, entry);
 }
 
 function clearDayLog(dateKey, instrument) {
   const inst = instrument ?? selectedInstrument;
-  const byDate = dailyResults[dateKey];
-  if (byDate && typeof byDate === 'object' && !isLegacyDailyEntry(byDate)) {
-    delete byDate[inst];
-    if (Object.keys(byDate).length === 0) delete dailyResults[dateKey];
-    else dailyResults[dateKey] = byDate;
-    saveDailyResults(dailyResults);
-    if (currentUser) deleteDayResultFromSupabase(currentUser.id, dateKey, inst);
-  } else if (byDate) {
-    delete dailyResults[dateKey];
-    saveDailyResults(dailyResults);
-    if (currentUser) deleteDayResultFromSupabase(currentUser.id, dateKey, inst);
+  const bucketDr = dailyResults[selectedStrategyId];
+  if (bucketDr) {
+    const byDate = bucketDr[dateKey];
+    if (byDate && typeof byDate === 'object' && !isLegacyDailyEntry(byDate)) {
+      delete byDate[inst];
+      if (Object.keys(byDate).length === 0) delete bucketDr[dateKey];
+      saveDailyResults(dailyResults);
+      if (currentUser) deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+    } else if (byDate) {
+      delete bucketDr[dateKey];
+      saveDailyResults(dailyResults);
+      if (currentUser) deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+    }
   }
-  const declByDate = declarations[dateKey];
-  if (declByDate && typeof declByDate === 'object' && !isLegacyDeclarationEntry(declByDate)) {
-    delete declByDate[inst];
-    if (Object.keys(declByDate).length === 0) delete declarations[dateKey];
-    else declarations[dateKey] = declByDate;
-    saveDeclarations(declarations);
-    if (currentUser) deleteDeclarationFromSupabase(currentUser.id, dateKey, inst);
-  } else if (declByDate) {
-    delete declarations[dateKey];
-    saveDeclarations(declarations);
-    if (currentUser) deleteDeclarationFromSupabase(currentUser.id, dateKey, inst);
+  const bucketDc = declarations[selectedStrategyId];
+  if (bucketDc) {
+    const declByDate = bucketDc[dateKey];
+    if (declByDate && typeof declByDate === 'object' && !isLegacyDeclarationEntry(declByDate)) {
+      delete declByDate[inst];
+      if (Object.keys(declByDate).length === 0) delete bucketDc[dateKey];
+      saveDeclarations(declarations);
+      if (currentUser) deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+    } else if (declByDate) {
+      delete bucketDc[dateKey];
+      saveDeclarations(declarations);
+      if (currentUser) deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+    }
   }
 }
 
@@ -699,11 +804,25 @@ document.addEventListener('DOMContentLoaded', () => {
       declarations = await fetchDeclarationsFromSupabase(currentUser.id);
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
+      const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
+      if (Array.isArray(remoteStrategies) && remoteStrategies.length > 0) {
+        const hasDefault = remoteStrategies.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
+        strategies = hasDefault ? remoteStrategies : [{ id: STRATEGY_DEFAULT_ID, name: 'Default' }, ...remoteStrategies];
+      } else {
+        strategies = loadStrategies();
+        if (!strategies.length) strategies = [{ id: STRATEGY_DEFAULT_ID, name: 'Default' }];
+      }
+      saveStrategies(strategies);
     } else {
       dailyResults = loadDailyResults();
       declarations = loadDeclarations();
+      strategies = loadStrategies();
     }
+    selectedStrategyId = loadSelectedStrategyId();
+    if (!strategies.some((s) => s.id === selectedStrategyId)) selectedStrategyId = strategies[0]?.id || STRATEGY_DEFAULT_ID;
+    saveSelectedStrategyId(selectedStrategyId);
     updateAuthUI();
+    if (typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
     renderCalendar();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
   }
@@ -722,6 +841,48 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.querySelectorAll('.nav-tab').forEach((tab) => {
     tab.addEventListener('click', () => showScreen(tab.dataset.screen));
+  });
+
+  function renderStrategyPills() {
+    strategies = loadStrategies();
+    const container = document.getElementById('strategyPills');
+    if (!container) return;
+    container.innerHTML = '';
+    strategies.forEach((s) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'strategy-pill' + (s.id === selectedStrategyId ? ' selected' : '');
+      btn.textContent = s.name;
+      btn.dataset.strategyId = s.id;
+      btn.setAttribute('aria-pressed', s.id === selectedStrategyId ? 'true' : 'false');
+      btn.addEventListener('click', () => {
+        selectedStrategyId = s.id;
+        saveSelectedStrategyId(selectedStrategyId);
+        container.querySelectorAll('.strategy-pill').forEach((p) => {
+          p.classList.toggle('selected', p.dataset.strategyId === selectedStrategyId);
+          p.setAttribute('aria-pressed', p.dataset.strategyId === selectedStrategyId ? 'true' : 'false');
+        });
+        renderCalendar();
+        if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+        if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+      });
+      container.appendChild(btn);
+    });
+  }
+  window.renderStrategyPills = renderStrategyPills;
+
+  document.getElementById('addStrategyBtn')?.addEventListener('click', () => {
+    const name = prompt('Strategy name', '');
+    if (name == null || !name.trim()) return;
+    const id = createStrategy(name.trim());
+    if (currentUser && id !== STRATEGY_DEFAULT_ID && /^[0-9a-f-]{36}$/i.test(id)) insertStrategyToSupabase(currentUser.id, id, name.trim());
+    strategies = loadStrategies();
+    selectedStrategyId = id;
+    saveSelectedStrategyId(id);
+    renderStrategyPills();
+    renderCalendar();
+    if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+    if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
   });
 
   const loginButton = document.getElementById('loginButton');
@@ -1018,8 +1179,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  function getResultsInRange(periodKey, instrument) {
+  function getResultsInRange(periodKey, instrument, strategyId) {
     const inst = instrument ?? selectedInstrument;
+    const sid = strategyId ?? selectedStrategyId;
+    const bucket = dailyResults[sid] || {};
     const end = new Date();
     const results = [];
     let start;
@@ -1039,7 +1202,8 @@ document.addEventListener('DOMContentLoaded', () => {
     while (cur <= endCopy) {
       if (isWeekday(cur)) {
         const key = formatDateKey(cur);
-        const data = getDayResult(key, inst);
+        const byDate = bucket[key];
+        const data = byDate && typeof byDate === 'object' && !isLegacyDailyEntry(byDate) ? byDate[inst] : null;
         if (data) results.push({ key, ...data });
       }
       cur.setDate(cur.getDate() + 1);
@@ -1049,7 +1213,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getResultsForLatestMonth(instrument) {
     const inst = instrument ?? selectedInstrument;
-    const keys = Object.keys(dailyResults).filter((k) => getDayResult(k, inst));
+    const bucket = dailyResults[selectedStrategyId] || {};
+    const keys = Object.keys(bucket).filter((k) => getDayResult(k, inst));
     if (keys.length === 0) return [];
     keys.sort();
     const latest = keys[keys.length - 1];
@@ -1067,6 +1232,30 @@ document.addEventListener('DOMContentLoaded', () => {
       cur.setDate(cur.getDate() + 1);
     }
     return results;
+  }
+
+  function computeMetricsFromResults(results) {
+    const totalR = results.reduce((s, r) => s + r.totalR, 0);
+    const greenDays = results.filter((r) => r.totalR > 0).length;
+    const winRate = results.length ? (greenDays / results.length * 100) : 0;
+    let runningTotal = 0, peak = 0, maxDrawdown = 0;
+    results.forEach((r) => {
+      runningTotal += r.totalR;
+      if (runningTotal > peak) peak = runningTotal;
+      const drawdown = peak - runningTotal;
+      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    });
+    let winningStreak = 0, losingStreak = 0, curWin = 0, curLose = 0;
+    results.forEach((r) => {
+      if (r.totalR > 0) { curWin++; curLose = 0; if (curWin > winningStreak) winningStreak = curWin; }
+      else if (r.totalR < 0) { curLose++; curWin = 0; if (curLose > losingStreak) losingStreak = curLose; }
+      else { curWin = 0; curLose = 0; }
+    });
+    const firstTradeOutcomes = results.map((r) => (r.trade_1_r != null ? r.trade_1_r : (r.tradeCount === 1 && r.totalR != null ? r.totalR : null))).filter((x) => x != null);
+    const firstTradeWinRate = firstTradeOutcomes.length ? (firstTradeOutcomes.filter((r) => r > 0).length / firstTradeOutcomes.length * 100) : null;
+    const twoTradeDays = results.filter((r) => r.tradeCount === 2);
+    const secondTradeWinRate = twoTradeDays.length ? (twoTradeDays.filter((r) => r.totalR === 1).length / twoTradeDays.length * 100) : null;
+    return { totalR, winRate, firstTradeWinRate, secondTradeWinRate, maxDrawdown, winningStreak, losingStreak };
   }
 
   function renderAnalytics() {
@@ -1091,52 +1280,7 @@ document.addEventListener('DOMContentLoaded', () => {
         usedFallback = true;
       }
     }
-    const totalR = results.reduce((s, r) => s + r.totalR, 0);
-    const greenDays = results.filter((r) => r.totalR > 0).length;
-    const winRate = results.length ? (greenDays / results.length * 100) : 0;
-
-    let runningTotal = 0;
-    let peak = 0;
-    let maxDrawdown = 0;
-    results.forEach((r) => {
-      runningTotal += r.totalR;
-      if (runningTotal > peak) peak = runningTotal;
-      const drawdown = peak - runningTotal;
-      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-    });
-
-    let winningStreak = 0;
-    let losingStreak = 0;
-    let curWin = 0;
-    let curLose = 0;
-    results.forEach((r) => {
-      if (r.totalR > 0) {
-        curWin++;
-        curLose = 0;
-        if (curWin > winningStreak) winningStreak = curWin;
-      } else if (r.totalR < 0) {
-        curLose++;
-        curWin = 0;
-        if (curLose > losingStreak) losingStreak = curLose;
-      } else {
-        curWin = 0;
-        curLose = 0;
-      }
-    });
-
-    const firstTradeOutcomes = results.map((r) => {
-      if (r.trade_1_r != null) return r.trade_1_r;
-      if (r.tradeCount === 1 && r.totalR != null) return r.totalR;
-      return null;
-    }).filter((x) => x != null);
-    const firstTradeWins = firstTradeOutcomes.filter((r) => r > 0).length;
-    const firstTradeWinRate = firstTradeOutcomes.length ? (firstTradeWins / firstTradeOutcomes.length * 100) : null;
-
-    // Second trade: only 2-trade days. +1R = first loss, second win; -2R = both losses.
-    const twoTradeDays = results.filter((r) => r.tradeCount === 2);
-    const secondTradeWins = twoTradeDays.filter((r) => r.totalR === 1).length;
-    const secondTradeWinRate = twoTradeDays.length ? (secondTradeWins / twoTradeDays.length * 100) : null;
-
+    const m = computeMetricsFromResults(results);
     const set = (id, text) => {
       const el = document.getElementById(id);
       if (el) el.textContent = text;
@@ -1154,15 +1298,60 @@ document.addEventListener('DOMContentLoaded', () => {
         fallbackEl.textContent = '';
       }
     }
-    set('metricWinRate', results.length ? winRate.toFixed(1) + '%' : '—');
-    set('metricFirstTradeWinRate', firstTradeWinRate != null ? firstTradeWinRate.toFixed(1) + '%' : '—');
-    set('metricSecondTradeWinRate', secondTradeWinRate != null ? secondTradeWinRate.toFixed(1) + '%' : '—');
-    set('metricMaxDrawdown', results.length ? (maxDrawdown > 0 ? '-' : '') + maxDrawdown + 'R' : '—');
-    set('metricWinningStreak', results.length ? String(winningStreak) : '—');
-    set('metricLosingStreak', results.length ? String(losingStreak) : '—');
-    set('metricTotalR', results.length ? formatR(totalR) : '—');
+    set('metricWinRate', results.length ? m.winRate.toFixed(1) + '%' : '—');
+    set('metricFirstTradeWinRate', m.firstTradeWinRate != null ? m.firstTradeWinRate.toFixed(1) + '%' : '—');
+    set('metricSecondTradeWinRate', m.secondTradeWinRate != null ? m.secondTradeWinRate.toFixed(1) + '%' : '—');
+    set('metricMaxDrawdown', results.length ? (m.maxDrawdown > 0 ? '-' : '') + m.maxDrawdown + 'R' : '—');
+    set('metricWinningStreak', results.length ? String(m.winningStreak) : '—');
+    set('metricLosingStreak', results.length ? String(m.losingStreak) : '—');
+    set('metricTotalR', results.length ? formatR(m.totalR) : '—');
+    if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
   }
   window.renderAnalytics = renderAnalytics;
+
+  let compareCheckedIds = new Set();
+  function renderCompareStrategies() {
+    const list = loadStrategies();
+    const checkboxesEl = document.getElementById('compareStrategyCheckboxes');
+    const tableEl = document.getElementById('compareStrategyTable');
+    if (!checkboxesEl || !tableEl) return;
+    checkboxesEl.innerHTML = '';
+    list.forEach((s) => {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.strategyId = s.id;
+      if (compareCheckedIds.has(s.id)) cb.checked = true;
+      cb.addEventListener('change', () => {
+        if (cb.checked) compareCheckedIds.add(s.id); else compareCheckedIds.delete(s.id);
+        renderCompareTable();
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(s.name));
+      checkboxesEl.appendChild(label);
+    });
+
+    function renderCompareTable() {
+      compareCheckedIds = new Set(Array.from(checkboxesEl.querySelectorAll('input:checked')).map((c) => c.dataset.strategyId));
+      const checked = Array.from(compareCheckedIds);
+      if (checked.length < 2) {
+        tableEl.hidden = true;
+        tableEl.innerHTML = '';
+        return;
+      }
+      const periodKey = analyticsPeriod;
+      const rows = checked.map((sid) => {
+        const results = getResultsInRange(periodKey, undefined, sid);
+        const m = computeMetricsFromResults(results);
+        const name = list.find((s) => s.id === sid)?.name || sid;
+        return { name, ...m };
+      });
+      tableEl.innerHTML = '<table><thead><tr><th>Strategy</th><th>Win rate</th><th>1st trade %</th><th>2nd trade %</th><th>Max DD</th><th>Win streak</th><th>Lose streak</th><th>Total R</th></tr></thead><tbody>' +
+        rows.map((r) => '<tr><td>' + r.name + '</td><td>' + (r.winRate != null ? r.winRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.firstTradeWinRate != null ? r.firstTradeWinRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.secondTradeWinRate != null ? r.secondTradeWinRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.maxDrawdown > 0 ? '-' : '') + r.maxDrawdown + 'R</td><td>' + r.winningStreak + '</td><td>' + r.losingStreak + '</td><td>' + formatR(r.totalR) + '</td></tr>').join('') + '</tbody></table>';
+      tableEl.hidden = false;
+    }
+  }
+  window.renderCompareStrategies = renderCompareStrategies;
 
   document.getElementById('shareGenerateBtn')?.addEventListener('click', () => {
     const periodVal = document.getElementById('sharePeriod')?.value || 'month';
@@ -1216,5 +1405,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   selectedDate = new Date();
+  if (!supa && typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
   showScreen('calendar');
 });
