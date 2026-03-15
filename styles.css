@@ -460,6 +460,26 @@ body {
   font-size: 0.9rem;
 }
 
+.auth-modal-switch {
+  margin: 1rem 0 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.auth-modal-switch-btn {
+  background: none;
+  border: none;
+  color: var(--selected-border);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.auth-modal-switch-btn:hover {
+  opacity: 0.9;
+}
+
 /* Analytics screen */
 .analytics-container {
   max-width: 480px;

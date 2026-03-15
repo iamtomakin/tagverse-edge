@@ -155,6 +155,76 @@ function saveDeclarations(data) {
   } catch (_) {}
 }
 
+async function fetchDailyResultsFromSupabase(userId) {
+  const supa = initSupabase();
+  if (!supa) return {};
+  const { data: rows, error } = await supa.from('daily_results').select('date_key, instrument, total_r, trade_count, trade_1_r').eq('user_id', userId);
+  if (error) return {};
+  const out = {};
+  (rows || []).forEach((r) => {
+    if (!out[r.date_key]) out[r.date_key] = {};
+    out[r.date_key][r.instrument] = { totalR: r.total_r, tradeCount: r.trade_count };
+    if (r.trade_1_r != null) out[r.date_key][r.instrument].trade_1_r = r.trade_1_r;
+  });
+  return out;
+}
+
+async function fetchDeclarationsFromSupabase(userId) {
+  const supa = initSupabase();
+  if (!supa) return {};
+  const { data: rows, error } = await supa.from('declarations').select('date_key, instrument, trade_count_planned, created_at').eq('user_id', userId);
+  if (error) return {};
+  const out = {};
+  (rows || []).forEach((r) => {
+    if (!out[r.date_key]) out[r.date_key] = {};
+    out[r.date_key][r.instrument] = { tradeCountPlanned: r.trade_count_planned, createdAt: r.created_at };
+  });
+  return out;
+}
+
+async function persistDayResultToSupabase(userId, dateKey, instrument, entry) {
+  const supa = initSupabase();
+  if (!supa) return;
+  await supa.from('daily_results').upsert(
+    {
+      user_id: userId,
+      date_key: dateKey,
+      instrument,
+      total_r: entry.totalR,
+      trade_count: entry.tradeCount,
+      trade_1_r: entry.trade_1_r ?? null
+    },
+    { onConflict: 'user_id,date_key,instrument' }
+  );
+}
+
+async function persistDeclarationToSupabase(userId, dateKey, instrument, tradeCountPlanned, createdAt) {
+  const supa = initSupabase();
+  if (!supa) return;
+  await supa.from('declarations').upsert(
+    {
+      user_id: userId,
+      date_key: dateKey,
+      instrument,
+      trade_count_planned: tradeCountPlanned,
+      created_at: createdAt
+    },
+    { onConflict: 'user_id,date_key,instrument' }
+  );
+}
+
+async function deleteDayResultFromSupabase(userId, dateKey, instrument) {
+  const supa = initSupabase();
+  if (!supa) return;
+  await supa.from('daily_results').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+}
+
+async function deleteDeclarationFromSupabase(userId, dateKey, instrument) {
+  const supa = initSupabase();
+  if (!supa) return;
+  await supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+}
+
 let dailyResults = loadDailyResults();
 let declarations = loadDeclarations();
 
@@ -257,11 +327,13 @@ function formatDeclarationTime(isoString) {
 
 function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
+  const createdAt = new Date().toISOString();
   const existing = declarations[dateKey];
   const byInstrument = typeof existing === 'object' && existing !== null && !isLegacyDeclarationEntry(existing) ? { ...existing } : {};
-  byInstrument[inst] = { tradeCountPlanned, createdAt: new Date().toISOString() };
+  byInstrument[inst] = { tradeCountPlanned, createdAt };
   declarations[dateKey] = byInstrument;
   saveDeclarations(declarations);
+  if (currentUser) persistDeclarationToSupabase(currentUser.id, dateKey, inst, tradeCountPlanned, createdAt);
 }
 
 function setDayResult(dateKey, instrument, totalR, tradeCount) {
@@ -273,6 +345,7 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
   byInstrument[inst] = entry;
   dailyResults[dateKey] = byInstrument;
   saveDailyResults(dailyResults);
+  if (currentUser) persistDayResultToSupabase(currentUser.id, dateKey, inst, entry);
 }
 
 function clearDayLog(dateKey, instrument) {
@@ -283,9 +356,11 @@ function clearDayLog(dateKey, instrument) {
     if (Object.keys(byDate).length === 0) delete dailyResults[dateKey];
     else dailyResults[dateKey] = byDate;
     saveDailyResults(dailyResults);
+    if (currentUser) deleteDayResultFromSupabase(currentUser.id, dateKey, inst);
   } else if (byDate) {
     delete dailyResults[dateKey];
     saveDailyResults(dailyResults);
+    if (currentUser) deleteDayResultFromSupabase(currentUser.id, dateKey, inst);
   }
   const declByDate = declarations[dateKey];
   if (declByDate && typeof declByDate === 'object' && !isLegacyDeclarationEntry(declByDate)) {
@@ -293,9 +368,11 @@ function clearDayLog(dateKey, instrument) {
     if (Object.keys(declByDate).length === 0) delete declarations[dateKey];
     else declarations[dateKey] = declByDate;
     saveDeclarations(declarations);
+    if (currentUser) deleteDeclarationFromSupabase(currentUser.id, dateKey, inst);
   } else if (declByDate) {
     delete declarations[dateKey];
     saveDeclarations(declarations);
+    if (currentUser) deleteDeclarationFromSupabase(currentUser.id, dateKey, inst);
   }
 }
 
@@ -616,19 +693,30 @@ function saveOutcomeFromModal(r) {
 document.addEventListener('DOMContentLoaded', () => {
   currentMode = loadCurrentMode();
 
+  async function applyAuthState() {
+    if (currentUser) {
+      dailyResults = await fetchDailyResultsFromSupabase(currentUser.id);
+      declarations = await fetchDeclarationsFromSupabase(currentUser.id);
+      saveDailyResults(dailyResults);
+      saveDeclarations(declarations);
+    } else {
+      dailyResults = loadDailyResults();
+      declarations = loadDeclarations();
+    }
+    updateAuthUI();
+    renderCalendar();
+    if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  }
+
   const supa = initSupabase();
   if (supa) {
     supa.auth.getSession().then(({ data }) => {
       currentUser = data.session ? data.session.user : null;
-      updateAuthUI();
-      renderCalendar();
-      if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+      applyAuthState();
     });
     supa.auth.onAuthStateChange((_event, session) => {
       currentUser = session ? session.user : null;
-      updateAuthUI();
-      renderCalendar();
-      if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+      applyAuthState();
     });
   }
 
@@ -641,11 +729,30 @@ document.addEventListener('DOMContentLoaded', () => {
   const authModal = document.getElementById('authModal');
   const authModalBackdrop = document.getElementById('authModalBackdrop');
   const authEmail = document.getElementById('authEmail');
+  const authPassword = document.getElementById('authPassword');
+  const authPasswordConfirm = document.getElementById('authPasswordConfirm');
+  const authPasswordConfirmWrap = document.getElementById('authPasswordConfirmWrap');
   const authModalMessage = document.getElementById('authModalMessage');
-  const authModalSend = document.getElementById('authModalSend');
+  const authModalTitle = document.getElementById('authModalTitle');
+  const authModalSubtitle = document.getElementById('authModalSubtitle');
+  const authModalSubmit = document.getElementById('authModalSubmit');
   const authModalCancel = document.getElementById('authModalCancel');
+  const authModalSwitchMode = document.getElementById('authModalSwitchMode');
 
   if (loginButton) loginButton.textContent = 'Sign in with email';
+
+  let authModalMode = 'signin';
+
+  function setAuthModalMode(mode) {
+    authModalMode = mode;
+    if (authModalTitle) authModalTitle.textContent = mode === 'signup' ? 'Sign up' : 'Sign in';
+    if (authModalSubtitle) authModalSubtitle.textContent = mode === 'signup' ? 'Create an account with your email and a password.' : 'Enter your email and password.';
+    if (authModalSubmit) authModalSubmit.textContent = mode === 'signup' ? 'Sign up' : 'Sign in';
+    if (authModalSwitchMode) authModalSwitchMode.textContent = mode === 'signup' ? 'Already have an account? Sign in' : 'Create an account';
+    if (authPasswordConfirmWrap) authPasswordConfirmWrap.hidden = mode !== 'signup';
+    if (authPassword) authPassword.placeholder = mode === 'signup' ? 'Min 6 characters' : '••••••••';
+    if (authPassword) authPassword.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+  }
 
   function openAuthModal() {
     const supaClient = initSupabase();
@@ -655,7 +762,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (authModal) {
       authModal.hidden = false;
+      authModalMode = 'signin';
+      setAuthModalMode('signin');
       if (authEmail) authEmail.value = '';
+      if (authPassword) authPassword.value = '';
+      if (authPasswordConfirm) authPasswordConfirm.value = '';
       if (authModalMessage) { authModalMessage.hidden = true; authModalMessage.textContent = ''; }
       authEmail?.focus();
     }
@@ -663,37 +774,75 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function closeAuthModal() {
     if (authModal) authModal.hidden = true;
+    if (authPassword) authPassword.value = '';
+    if (authPasswordConfirm) authPasswordConfirm.value = '';
   }
 
   if (loginButton) loginButton.addEventListener('click', openAuthModal);
   if (authModalBackdrop) authModalBackdrop.addEventListener('click', closeAuthModal);
   if (authModalCancel) authModalCancel.addEventListener('click', closeAuthModal);
 
-  if (authModalSend) {
-    authModalSend.addEventListener('click', async () => {
+  if (authModalSwitchMode) {
+    authModalSwitchMode.addEventListener('click', () => {
+      const next = authModalMode === 'signin' ? 'signup' : 'signin';
+      setAuthModalMode(next);
+      if (authModalMessage) { authModalMessage.hidden = true; authModalMessage.textContent = ''; }
+    });
+  }
+
+  if (authModalSubmit) {
+    authModalSubmit.addEventListener('click', async () => {
       const email = authEmail?.value?.trim();
+      const password = authPassword?.value ?? '';
       if (!email) {
         if (authModalMessage) { authModalMessage.textContent = 'Please enter your email.'; authModalMessage.hidden = false; }
         return;
       }
+      if (!password) {
+        if (authModalMessage) { authModalMessage.textContent = 'Please enter your password.'; authModalMessage.hidden = false; }
+        return;
+      }
+      if (authModalMode === 'signup') {
+        const confirmVal = authPasswordConfirm?.value ?? '';
+        if (password !== confirmVal) {
+          if (authModalMessage) { authModalMessage.textContent = 'Passwords do not match.'; authModalMessage.hidden = false; }
+          return;
+        }
+        if (password.length < 6) {
+          if (authModalMessage) { authModalMessage.textContent = 'Password must be at least 6 characters.'; authModalMessage.hidden = false; }
+          return;
+        }
+      }
       const supaClient = initSupabase();
       if (!supaClient) return;
-      authModalSend.disabled = true;
-      if (authModalMessage) { authModalMessage.textContent = 'Sending…'; authModalMessage.hidden = false; }
-      const { error } = await supaClient.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.origin + (window.location.pathname || '/') }
-      });
-      authModalSend.disabled = false;
+      authModalSubmit.disabled = true;
+      if (authModalMessage) { authModalMessage.hidden = true; authModalMessage.textContent = ''; }
+
+      if (authModalMode === 'signin') {
+        const { error } = await supaClient.auth.signInWithPassword({ email, password });
+        authModalSubmit.disabled = false;
+        if (error) {
+          if (authModalMessage) { authModalMessage.textContent = error.message; authModalMessage.hidden = false; }
+          return;
+        }
+        closeAuthModal();
+        return;
+      }
+
+      const { data, error } = await supaClient.auth.signUp({ email, password });
+      authModalSubmit.disabled = false;
       if (error) {
         if (authModalMessage) { authModalMessage.textContent = error.message; authModalMessage.hidden = false; }
         return;
       }
+      if (data.session) {
+        closeAuthModal();
+        return;
+      }
       if (authModalMessage) {
-        authModalMessage.textContent = 'Check your email for the sign-in link.';
+        authModalMessage.textContent = 'Account created. Check your email to confirm, or sign in if confirmation is disabled.';
         authModalMessage.hidden = false;
       }
-      setTimeout(closeAuthModal, 3000);
     });
   }
 
