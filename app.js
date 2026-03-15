@@ -92,6 +92,27 @@ function createStrategy(name) {
   return id;
 }
 
+function deleteStrategy(id) {
+  if (id === STRATEGY_DEFAULT_ID) return;
+  const list = loadStrategies().filter((s) => s.id !== id);
+  if (list.length === 0) return;
+  saveStrategies(list);
+  delete dailyResults[id];
+  delete declarations[id];
+  saveDailyResults(dailyResults);
+  saveDeclarations(declarations);
+  if (currentUser) deleteStrategyFromSupabase(currentUser.id, id);
+  if (selectedStrategyId === id) {
+    selectedStrategyId = list[0].id;
+    saveSelectedStrategyId(selectedStrategyId);
+  }
+  strategies = loadStrategies();
+  renderStrategyPills();
+  renderCalendar();
+  if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+}
+
 let strategies = loadStrategies();
 let selectedStrategyId = loadSelectedStrategyId();
 
@@ -314,6 +335,15 @@ async function deleteDeclarationFromSupabase(userId, strategyId, dateKey, instru
   let q = supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
   if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
   await q;
+}
+
+async function deleteStrategyFromSupabase(userId, strategyId) {
+  if (!strategyId || strategyId === STRATEGY_DEFAULT_ID || !/^[0-9a-f-]{36}$/i.test(strategyId)) return;
+  const supa = initSupabase();
+  if (!supa) return;
+  await supa.from('daily_results').delete().eq('user_id', userId).eq('strategy_id', strategyId);
+  await supa.from('declarations').delete().eq('user_id', userId).eq('strategy_id', strategyId);
+  await supa.from('strategies').delete().eq('id', strategyId).eq('user_id', userId);
 }
 
 let dailyResults = loadDailyResults();
@@ -843,12 +873,31 @@ document.addEventListener('DOMContentLoaded', () => {
     tab.addEventListener('click', () => showScreen(tab.dataset.screen));
   });
 
+  let pendingDeleteStrategyId = null;
+
+  function openDeleteStrategyModal(id, name) {
+    pendingDeleteStrategyId = id;
+    const msg = document.getElementById('deleteStrategyModalMessage');
+    if (msg) msg.textContent = `If you delete "${name}", you will lose all its data (results and declarations). This cannot be undone.`;
+    const modal = document.getElementById('deleteStrategyModal');
+    if (modal) modal.hidden = false;
+  }
+
+  function closeDeleteStrategyModal() {
+    pendingDeleteStrategyId = null;
+    const modal = document.getElementById('deleteStrategyModal');
+    if (modal) modal.hidden = true;
+  }
+
   function renderStrategyPills() {
     strategies = loadStrategies();
     const container = document.getElementById('strategyPills');
     if (!container) return;
     container.innerHTML = '';
     strategies.forEach((s) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'strategy-pill-wrap';
+
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'strategy-pill' + (s.id === selectedStrategyId ? ' selected' : '');
@@ -866,10 +915,35 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
         if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
       });
-      container.appendChild(btn);
+      wrap.appendChild(btn);
+
+      if (s.id !== STRATEGY_DEFAULT_ID) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'strategy-pill-remove';
+        removeBtn.setAttribute('aria-label', 'Delete strategy ' + s.name);
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openDeleteStrategyModal(s.id, s.name);
+        });
+        wrap.appendChild(removeBtn);
+      }
+
+      container.appendChild(wrap);
     });
   }
   window.renderStrategyPills = renderStrategyPills;
+
+  document.getElementById('deleteStrategyModalBackdrop')?.addEventListener('click', closeDeleteStrategyModal);
+  document.getElementById('deleteStrategyModalNo')?.addEventListener('click', closeDeleteStrategyModal);
+  document.getElementById('deleteStrategyModalYes')?.addEventListener('click', () => {
+    if (pendingDeleteStrategyId) {
+      deleteStrategy(pendingDeleteStrategyId);
+      closeDeleteStrategyModal();
+    }
+  });
 
   document.getElementById('addStrategyBtn')?.addEventListener('click', () => {
     const name = prompt('Strategy name', '');

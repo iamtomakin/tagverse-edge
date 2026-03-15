@@ -55,6 +55,19 @@
       </div>
     </div>
 
+    <!-- Delete strategy confirmation modal -->
+    <div id="deleteStrategyModal" class="log-modal" role="dialog" aria-label="Delete strategy" hidden>
+      <div class="log-modal-backdrop" id="deleteStrategyModalBackdrop"></div>
+      <div class="log-modal-content">
+        <h2>Delete strategy?</h2>
+        <p id="deleteStrategyModalMessage" class="log-modal-instrument">If you delete this strategy, you will lose all its data (results and declarations). This cannot be undone.</p>
+        <div class="log-modal-actions">
+          <button type="button" id="deleteStrategyModalYes" class="log-modal-clear">Yes, delete</button>
+          <button type="button" id="deleteStrategyModalNo" class="log-modal-cancel">No</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Screen 1: Calendar dashboard (home) -->
     <main id="screen-calendar" class="screen active" role="main">
       <div class="calendar-container">
