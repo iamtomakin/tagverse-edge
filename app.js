@@ -790,6 +790,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function onAuthModalKeydown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      authModalSubmit?.click();
+    }
+  }
+  authEmail?.addEventListener('keydown', onAuthModalKeydown);
+  authPassword?.addEventListener('keydown', onAuthModalKeydown);
+  authPasswordConfirm?.addEventListener('keydown', onAuthModalKeydown);
+
   if (authModalSubmit) {
     authModalSubmit.addEventListener('click', async () => {
       const email = authEmail?.value?.trim();
@@ -840,9 +850,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       if (authModalMessage) {
-        authModalMessage.textContent = 'Account created. Check your email to confirm, or sign in if confirmation is disabled.';
+        authModalMessage.textContent = 'Account created. Sign in below with your email and password.';
         authModalMessage.hidden = false;
       }
+      setAuthModalMode('signin');
+      if (authPassword) authPassword.value = '';
+      if (authPasswordConfirm) authPasswordConfirm.value = '';
+      authPassword?.focus();
     });
   }
 
