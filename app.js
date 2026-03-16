@@ -1526,6 +1526,7 @@ document.addEventListener('DOMContentLoaded', () => {
         rows.map((r) => '<tr><td>' + r.name + '</td><td>' + (r.winRate != null ? r.winRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.maxDrawdown > 0 ? '-' : '') + r.maxDrawdown + 'R</td><td>' + r.winningStreak + '</td><td>' + r.losingStreak + '</td><td>' + formatR(r.totalR) + '</td></tr>').join('') + '</tbody></table>';
       tableEl.hidden = false;
     }
+    renderCompareTable();
   }
   window.renderCompareStrategies = renderCompareStrategies;
 
