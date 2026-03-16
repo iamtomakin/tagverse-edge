@@ -92,6 +92,21 @@ function createStrategy(name) {
   return id;
 }
 
+function renameStrategy(id, newName) {
+  const trimmed = (newName || '').trim();
+  if (!trimmed) return;
+  const list = loadStrategies().map((s) => (s.id === id ? { ...s, name: trimmed } : s));
+  saveStrategies(list);
+  strategies = list;
+  if (currentUser && id !== STRATEGY_DEFAULT_ID && /^[0-9a-f-]{36}$/i.test(id)) {
+    updateStrategyNameInSupabase(currentUser.id, id, trimmed);
+  }
+  renderStrategyPills();
+  renderCalendar();
+  if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+}
+
 function deleteStrategy(id) {
   if (id === STRATEGY_DEFAULT_ID) return;
   const list = loadStrategies().filter((s) => s.id !== id);
@@ -304,6 +319,13 @@ async function insertStrategyToSupabase(userId, id, name) {
   if (!supa) return;
   if (id === STRATEGY_DEFAULT_ID) return;
   await supa.from('strategies').insert({ id, user_id: userId, name });
+}
+
+async function updateStrategyNameInSupabase(userId, id, name) {
+  const supa = initSupabase();
+  if (!supa) return;
+  if (id === STRATEGY_DEFAULT_ID) return;
+  await supa.from('strategies').update({ name }).eq('id', id).eq('user_id', userId);
 }
 
 async function persistDayResultToSupabase(userId, strategyId, dateKey, instrument, entry) {
@@ -948,6 +970,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   let pendingDeleteStrategyId = null;
+  let pendingRenameStrategyId = null;
 
   function openDeleteStrategyModal(id, name) {
     pendingDeleteStrategyId = id;
@@ -960,6 +983,26 @@ document.addEventListener('DOMContentLoaded', () => {
   function closeDeleteStrategyModal() {
     pendingDeleteStrategyId = null;
     const modal = document.getElementById('deleteStrategyModal');
+    if (modal) modal.hidden = true;
+  }
+
+  function openRenameStrategyModal(id, name) {
+    pendingRenameStrategyId = id;
+    const modal = document.getElementById('renameStrategyModal');
+    const subtitle = document.getElementById('renameStrategySubtitle');
+    const input = document.getElementById('renameStrategyInput');
+    if (subtitle) subtitle.textContent = name;
+    if (input) {
+      input.value = name;
+      input.focus();
+      input.select();
+    }
+    if (modal) modal.hidden = false;
+  }
+
+  function closeRenameStrategyModal() {
+    pendingRenameStrategyId = null;
+    const modal = document.getElementById('renameStrategyModal');
     if (modal) modal.hidden = true;
   }
 
@@ -991,6 +1034,17 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       wrap.appendChild(btn);
 
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'strategy-pill-rename';
+      renameBtn.setAttribute('aria-label', 'Rename strategy ' + s.name);
+      renameBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openRenameStrategyModal(s.id, s.name);
+      });
+      wrap.appendChild(renameBtn);
+
       if (s.id !== STRATEGY_DEFAULT_ID) {
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
@@ -1017,6 +1071,18 @@ document.addEventListener('DOMContentLoaded', () => {
       deleteStrategy(pendingDeleteStrategyId);
       closeDeleteStrategyModal();
     }
+  });
+
+  document.getElementById('renameStrategyModalBackdrop')?.addEventListener('click', closeRenameStrategyModal);
+  document.getElementById('renameStrategyCancel')?.addEventListener('click', closeRenameStrategyModal);
+  document.getElementById('renameStrategySave')?.addEventListener('click', () => {
+    if (!pendingRenameStrategyId) return;
+    const input = document.getElementById('renameStrategyInput');
+    if (!input) return;
+    const value = input.value.trim();
+    if (!value) return;
+    renameStrategy(pendingRenameStrategyId, value);
+    closeRenameStrategyModal();
   });
 
   document.getElementById('addStrategyBtn')?.addEventListener('click', () => {
@@ -1467,6 +1533,11 @@ document.addEventListener('DOMContentLoaded', () => {
       fallbackEl.hidden = true;
       fallbackEl.textContent = '';
     }
+    // Strategy label
+    const list = loadStrategies();
+    const currentStrategy = list.find((s) => s.id === selectedStrategyId) || list[0];
+    set('metricStrategyName', currentStrategy ? currentStrategy.name : '—');
+
     set('metricWinRate', results.length ? m.winRate.toFixed(1) + '%' : '—');
     set('metricMaxDrawdown', results.length ? (m.maxDrawdown > 0 ? '-' : '') + m.maxDrawdown + 'R' : '—');
     set('metricWinningStreak', results.length ? String(m.winningStreak) : '—');

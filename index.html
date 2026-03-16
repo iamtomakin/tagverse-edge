@@ -68,6 +68,23 @@
       </div>
     </div>
 
+    <!-- Rename strategy modal -->
+    <div id="renameStrategyModal" class="log-modal" role="dialog" aria-label="Rename strategy" hidden>
+      <div class="log-modal-backdrop" id="renameStrategyModalBackdrop"></div>
+      <div class="log-modal-content">
+        <h2 id="renameStrategyTitle">Edit strategy name</h2>
+        <p id="renameStrategySubtitle" class="log-modal-instrument"></p>
+        <div class="log-modal-section">
+          <label for="renameStrategyInput" class="log-modal-label">Name</label>
+          <input type="text" id="renameStrategyInput" class="auth-email-input" />
+        </div>
+        <div class="log-modal-actions">
+          <button type="button" id="renameStrategySave" class="log-modal-clear">Save</button>
+          <button type="button" id="renameStrategyCancel" class="log-modal-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Screen 1: Calendar dashboard (home) -->
     <main id="screen-calendar" class="screen active" role="main">
       <div class="calendar-container">
@@ -173,6 +190,8 @@
         </div>
         <p id="analyticsFallbackNote" class="analytics-fallback-note" hidden></p>
         <dl class="analytics-metrics">
+          <dt>Strategy</dt>
+          <dd id="metricStrategyName">—</dd>
           <dt>Win rate</dt>
           <dd id="metricWinRate">—</dd>
           <dt>Max drawdown</dt>

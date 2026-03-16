@@ -247,6 +247,10 @@ body {
   padding-right: 1.5rem;
 }
 
+.strategy-pill-wrap:has(.strategy-pill-rename) .strategy-pill {
+  padding-left: 1.5rem;
+}
+
 .strategy-pill:hover {
   background: var(--cell-default-hover);
 }
@@ -268,7 +272,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1rem;
+  font-size: 0.9rem;
   line-height: 1;
   color: var(--text-secondary);
   background: transparent;
@@ -280,7 +284,7 @@ body {
 
 .strategy-pill-remove:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-remove {
@@ -288,8 +292,51 @@ body {
 }
 
 .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-remove:hover {
-  color: var(--bg-primary);
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.strategy-pill-rename {
+  position: absolute;
+  top: 50%;
+  left: 0.25rem;
+  transform: translateY(-50%);
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: transparent;
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color var(--transition-ease), background-color var(--transition-ease);
+}
+
+.strategy-pill-rename:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.strategy-pill-rename::before {
+  content: '✏';
+  display: block;
+  width: 0.9rem;
+  height: 0.9rem;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.6rem;
+  line-height: 0.9rem;
+  text-align: center;
+}
+
+.strategy-pill.selected + .strategy-pill-rename {
+  color: transparent;
+}
+
+.strategy-pill.selected + .strategy-pill-rename:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .strategy-add-btn {
