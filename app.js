@@ -1319,13 +1319,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const period = document.querySelectorAll('.period-btn');
   let analyticsPeriod = 'month';
+  let analyticsCustomStart = null;
+  let analyticsCustomEnd = null;
+  const analyticsCustomRangeEl = document.getElementById('analyticsCustomRange');
+  const analyticsStartInput = document.getElementById('analyticsStartDate');
+  const analyticsEndInput = document.getElementById('analyticsEndDate');
+  const analyticsApplyBtn = document.getElementById('analyticsApplyRange');
+
   period.forEach((btn) => {
     btn.addEventListener('click', () => {
-      analyticsPeriod = btn.dataset.period;
+      analyticsPeriod = btn.dataset.period || 'month';
       period.forEach((b) => b.classList.toggle('active', b === btn));
+      if (analyticsCustomRangeEl) {
+        analyticsCustomRangeEl.hidden = analyticsPeriod !== 'custom';
+      }
       renderAnalytics();
     });
   });
+
+  if (analyticsApplyBtn) {
+    analyticsApplyBtn.addEventListener('click', () => {
+      if (!analyticsStartInput || !analyticsEndInput) return;
+      const startVal = analyticsStartInput.value;
+      const endVal = analyticsEndInput.value;
+      if (!startVal || !endVal) return;
+      const start = new Date(startVal);
+      const end = new Date(endVal);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return;
+      analyticsCustomStart = start;
+      analyticsCustomEnd = end;
+      analyticsPeriod = 'custom';
+      period.forEach((b) => b.classList.toggle('active', b.dataset.period === 'custom'));
+      if (analyticsCustomRangeEl) analyticsCustomRangeEl.hidden = false;
+      renderAnalytics();
+    });
+  }
 
   function getResultsInRange(periodKey, instrument, strategyId) {
     const inst = instrument ?? selectedInstrument;
@@ -1334,9 +1362,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const end = new Date();
     const results = [];
     let start;
-    if (periodKey === '30') {
-      start = new Date(end);
-      start.setDate(start.getDate() - 30);
+    if (periodKey === 'today') {
+      start = new Date(end.getFullYear(), end.getMonth(), end.getDate());
     } else if (periodKey === 'week') {
       start = new Date(end.getFullYear(), end.getMonth(), end.getDate());
       const dayOfWeek = start.getDay();
@@ -1348,6 +1375,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const cur = new Date(start);
     const endCopy = new Date(end.getFullYear(), end.getMonth(), end.getDate());
     while (cur <= endCopy) {
+      if (isWeekday(cur)) {
+        const key = formatDateKey(cur);
+        const byDate = bucket[key];
+        const data = byDate && typeof byDate === 'object' && !isLegacyDailyEntry(byDate) ? byDate[inst] : null;
+        if (data) results.push({ key, ...data });
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+    return results;
+  }
+
+  function getResultsInCustomRange(startDate, endDate, instrument, strategyId) {
+    if (!startDate || !endDate) return [];
+    const inst = instrument ?? selectedInstrument;
+    const sid = strategyId ?? selectedStrategyId;
+    const bucket = dailyResults[sid] || {};
+    const results = [];
+    const cur = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+    while (cur <= end) {
       if (isWeekday(cur)) {
         const key = formatDateKey(cur);
         const byDate = bucket[key];
@@ -1407,26 +1454,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderAnalytics() {
-    let results = getResultsInRange(analyticsPeriod);
-    let usedFallback = false;
-    if (results.length === 0 && (analyticsPeriod === 'month' || analyticsPeriod === 'week')) {
-      const tryOrder = analyticsPeriod === 'month' ? ['week', '30'] : ['month', '30'];
-      for (const key of tryOrder) {
-        const next = getResultsInRange(key);
-        if (next.length > 0) {
-          analyticsPeriod = key;
-          period.forEach((b) => b.classList.toggle('active', b.dataset.period === key));
-          results = next;
-          break;
-        }
-      }
-    }
-    if (results.length === 0) {
-      const latest = getResultsForLatestMonth();
-      if (latest.length > 0) {
-        results = latest;
-        usedFallback = true;
-      }
+    let results = [];
+    if (analyticsPeriod === 'custom' && analyticsCustomStart && analyticsCustomEnd) {
+      results = getResultsInCustomRange(analyticsCustomStart, analyticsCustomEnd);
+    } else {
+      const key = analyticsPeriod === 'today' || analyticsPeriod === 'week' || analyticsPeriod === 'month' ? analyticsPeriod : 'month';
+      results = getResultsInRange(key);
     }
     const m = computeMetricsFromResults(results);
     const set = (id, text) => {
@@ -1435,16 +1468,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     const fallbackEl = document.getElementById('analyticsFallbackNote');
     if (fallbackEl) {
-      if (usedFallback && results.length > 0) {
-        const sampleKey = results[0].key;
-        const [y, m] = sampleKey.split('-').map(Number);
-        const d = new Date(y, m - 1, 1);
-        fallbackEl.textContent = 'Showing latest available data (' + d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) + ')';
-        fallbackEl.hidden = false;
-      } else {
-        fallbackEl.hidden = true;
-        fallbackEl.textContent = '';
-      }
+      fallbackEl.hidden = true;
+      fallbackEl.textContent = '';
     }
     set('metricWinRate', results.length ? m.winRate.toFixed(1) + '%' : '—');
     set('metricFirstTradeWinRate', m.firstTradeWinRate != null ? m.firstTradeWinRate.toFixed(1) + '%' : '—');
@@ -1487,9 +1512,14 @@ document.addEventListener('DOMContentLoaded', () => {
         tableEl.innerHTML = '';
         return;
       }
-      const periodKey = analyticsPeriod;
       const rows = checked.map((sid) => {
-        const results = getResultsInRange(periodKey, undefined, sid);
+        let results = [];
+        if (analyticsPeriod === 'custom' && analyticsCustomStart && analyticsCustomEnd) {
+          results = getResultsInCustomRange(analyticsCustomStart, analyticsCustomEnd, undefined, sid);
+        } else {
+          const key = analyticsPeriod === 'today' || analyticsPeriod === 'week' || analyticsPeriod === 'month' ? analyticsPeriod : 'month';
+          results = getResultsInRange(key, undefined, sid);
+        }
         const m = computeMetricsFromResults(results);
         const name = list.find((s) => s.id === sid)?.name || sid;
         return { name, ...m };
@@ -1503,7 +1533,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('shareGenerateBtn')?.addEventListener('click', () => {
     const periodVal = document.getElementById('sharePeriod')?.value || 'month';
-    const results = getResultsInRange(periodVal === '30' ? '30' : 'month');
+    const key = periodVal === 'week' || periodVal === 'today' ? periodVal : 'month';
+    const results = getResultsInRange(key);
     const totalR = results.reduce((s, r) => s + r.totalR, 0);
     const streak = computeDisciplineStreak();
     const score = computeDisciplineScore();

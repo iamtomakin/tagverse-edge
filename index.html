@@ -161,9 +161,14 @@
       <div class="analytics-container">
         <h2 class="analytics-title">Performance</h2>
         <div class="analytics-period">
-          <button type="button" class="period-btn" data-period="week">This week</button>
+          <button type="button" class="period-btn" data-period="today">Today</button>
           <button type="button" class="period-btn active" data-period="month">This month</button>
-          <button type="button" class="period-btn" data-period="30">Last 30 days</button>
+          <button type="button" class="period-btn" data-period="week">This week</button>
+        </div>
+        <div class="analytics-custom-range" id="analyticsCustomRange" hidden>
+          <label>From <input type="date" id="analyticsStartDate" /></label>
+          <label>to <input type="date" id="analyticsEndDate" /></label>
+          <button type="button" id="analyticsApplyRange">Apply</button>
         </div>
         <p id="analyticsFallbackNote" class="analytics-fallback-note" hidden></p>
         <dl class="analytics-metrics">
@@ -198,7 +203,6 @@
           <label>Period</label>
           <select id="sharePeriod">
             <option value="month">This month</option>
-            <option value="30">Last 30 days</option>
           </select>
         </div>
         <button type="button" class="share-generate-btn" id="shareGenerateBtn">Generate link</button>
