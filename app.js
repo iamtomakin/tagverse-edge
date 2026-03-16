@@ -240,6 +240,20 @@ function saveDailyResults(data) {
   } catch (_) {}
 }
 
+function countDailyEntries(data) {
+  let n = 0;
+  if (!data || typeof data !== 'object') return n;
+  for (const sid of Object.keys(data)) {
+    const b = data[sid];
+    if (b && typeof b === 'object')
+      for (const dateKey of Object.keys(b)) {
+        const byInst = b[dateKey];
+        if (byInst && typeof byInst === 'object') n += Object.keys(byInst).length;
+      }
+  }
+  return n;
+}
+
 function saveDeclarations(data) {
   try {
     localStorage.setItem(STORAGE_KEYS.declarations, JSON.stringify(data));
@@ -850,30 +864,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function applyAuthState() {
     if (currentUser) {
-      // Always start from local so we never wipe data if remote fetch is empty or fails
+      // Always start from local; merge remote INTO local per date/instrument so we never wipe local data
       const localResults = loadDailyResults();
       const localDeclarations = loadDeclarations();
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
       const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
-      // Merge remote over local (remote wins per strategy)
       dailyResults = { ...localResults };
       for (const sid of Object.keys(remoteResults)) {
-        dailyResults[sid] = remoteResults[sid];
+        const remoteBucket = remoteResults[sid];
+        if (!remoteBucket || typeof remoteBucket !== 'object') continue;
+        if (!dailyResults[sid]) dailyResults[sid] = {};
+        for (const dateKey of Object.keys(remoteBucket)) {
+          const remoteByDate = remoteBucket[dateKey];
+          if (!remoteByDate || typeof remoteByDate !== 'object') continue;
+          if (!dailyResults[sid][dateKey]) dailyResults[sid][dateKey] = {};
+          for (const inst of Object.keys(remoteByDate)) {
+            const entry = remoteByDate[inst];
+            if (entry && typeof entry === 'object') dailyResults[sid][dateKey][inst] = entry;
+          }
+        }
       }
       declarations = { ...localDeclarations };
       for (const sid of Object.keys(remoteDeclarations)) {
-        declarations[sid] = remoteDeclarations[sid];
+        const remoteBucket = remoteDeclarations[sid];
+        if (!remoteBucket || typeof remoteBucket !== 'object') continue;
+        if (!declarations[sid]) declarations[sid] = {};
+        for (const dateKey of Object.keys(remoteBucket)) {
+          const remoteByDate = remoteBucket[dateKey];
+          if (!remoteByDate || typeof remoteByDate !== 'object') continue;
+          if (!declarations[sid][dateKey]) declarations[sid][dateKey] = {};
+          for (const inst of Object.keys(remoteByDate)) {
+            const entry = remoteByDate[inst];
+            if (entry && typeof entry === 'object') declarations[sid][dateKey][inst] = entry;
+          }
+        }
       }
-      // Never overwrite localStorage with empty: if remote has no data but local does, keep localStorage unchanged
-      const remoteHasResults = Object.values(remoteResults).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
-      const remoteHasDeclarations = Object.values(remoteDeclarations).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
-      const localHasResults = Object.values(localResults).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
-      const localHasDeclarations = Object.values(localDeclarations).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
-      const wouldWipeLocal = !remoteHasResults && !remoteHasDeclarations && (localHasResults || localHasDeclarations);
-      if (!wouldWipeLocal) {
-        saveDailyResults(dailyResults);
-        saveDeclarations(declarations);
+      // Never persist fewer entries than we loaded from localStorage
+      const localCount = countDailyEntries(localResults);
+      const mergedCount = countDailyEntries(dailyResults);
+      if (mergedCount < localCount) {
+        dailyResults = localResults;
+        declarations = localDeclarations;
       }
+      saveDailyResults(dailyResults);
+      saveDeclarations(declarations);
       const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
       if (Array.isArray(remoteStrategies) && remoteStrategies.length > 0) {
         const hasDefault = remoteStrategies.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
