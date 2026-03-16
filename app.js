@@ -850,10 +850,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function applyAuthState() {
     if (currentUser) {
-      dailyResults = await fetchDailyResultsFromSupabase(currentUser.id);
-      declarations = await fetchDeclarationsFromSupabase(currentUser.id);
-      saveDailyResults(dailyResults);
-      saveDeclarations(declarations);
+      // Always start from local so we never wipe data if remote fetch is empty or fails
+      const localResults = loadDailyResults();
+      const localDeclarations = loadDeclarations();
+      const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
+      const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
+      // Merge remote over local (remote wins per strategy)
+      dailyResults = { ...localResults };
+      for (const sid of Object.keys(remoteResults)) {
+        dailyResults[sid] = remoteResults[sid];
+      }
+      declarations = { ...localDeclarations };
+      for (const sid of Object.keys(remoteDeclarations)) {
+        declarations[sid] = remoteDeclarations[sid];
+      }
+      // Never overwrite localStorage with empty: if remote has no data but local does, keep localStorage unchanged
+      const remoteHasResults = Object.values(remoteResults).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
+      const remoteHasDeclarations = Object.values(remoteDeclarations).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
+      const localHasResults = Object.values(localResults).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
+      const localHasDeclarations = Object.values(localDeclarations).some((b) => typeof b === 'object' && Object.keys(b).length > 0);
+      const wouldWipeLocal = !remoteHasResults && !remoteHasDeclarations && (localHasResults || localHasDeclarations);
+      if (!wouldWipeLocal) {
+        saveDailyResults(dailyResults);
+        saveDeclarations(declarations);
+      }
       const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
       if (Array.isArray(remoteStrategies) && remoteStrategies.length > 0) {
         const hasDefault = remoteStrategies.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
