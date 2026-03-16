@@ -1446,11 +1446,7 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (r.totalR < 0) { curLose++; curWin = 0; if (curLose > losingStreak) losingStreak = curLose; }
       else { curWin = 0; curLose = 0; }
     });
-    const firstTradeOutcomes = results.map((r) => (r.trade_1_r != null ? r.trade_1_r : (r.tradeCount === 1 && r.totalR != null ? r.totalR : null))).filter((x) => x != null);
-    const firstTradeWinRate = firstTradeOutcomes.length ? (firstTradeOutcomes.filter((r) => r > 0).length / firstTradeOutcomes.length * 100) : null;
-    const twoTradeDays = results.filter((r) => r.tradeCount === 2);
-    const secondTradeWinRate = twoTradeDays.length ? (twoTradeDays.filter((r) => r.totalR === 1).length / twoTradeDays.length * 100) : null;
-    return { totalR, winRate, firstTradeWinRate, secondTradeWinRate, maxDrawdown, winningStreak, losingStreak };
+    return { totalR, winRate, maxDrawdown, winningStreak, losingStreak };
   }
 
   function renderAnalytics() {
@@ -1472,8 +1468,6 @@ document.addEventListener('DOMContentLoaded', () => {
       fallbackEl.textContent = '';
     }
     set('metricWinRate', results.length ? m.winRate.toFixed(1) + '%' : '—');
-    set('metricFirstTradeWinRate', m.firstTradeWinRate != null ? m.firstTradeWinRate.toFixed(1) + '%' : '—');
-    set('metricSecondTradeWinRate', m.secondTradeWinRate != null ? m.secondTradeWinRate.toFixed(1) + '%' : '—');
     set('metricMaxDrawdown', results.length ? (m.maxDrawdown > 0 ? '-' : '') + m.maxDrawdown + 'R' : '—');
     set('metricWinningStreak', results.length ? String(m.winningStreak) : '—');
     set('metricLosingStreak', results.length ? String(m.losingStreak) : '—');
@@ -1524,8 +1518,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const name = list.find((s) => s.id === sid)?.name || sid;
         return { name, ...m };
       });
-      tableEl.innerHTML = '<table><thead><tr><th>Strategy</th><th>Win rate</th><th>1st trade %</th><th>2nd trade %</th><th>Max DD</th><th>Win streak</th><th>Lose streak</th><th>Total R</th></tr></thead><tbody>' +
-        rows.map((r) => '<tr><td>' + r.name + '</td><td>' + (r.winRate != null ? r.winRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.firstTradeWinRate != null ? r.firstTradeWinRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.secondTradeWinRate != null ? r.secondTradeWinRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.maxDrawdown > 0 ? '-' : '') + r.maxDrawdown + 'R</td><td>' + r.winningStreak + '</td><td>' + r.losingStreak + '</td><td>' + formatR(r.totalR) + '</td></tr>').join('') + '</tbody></table>';
+      tableEl.innerHTML = '<table><thead><tr><th>Strategy</th><th>Win rate</th><th>Max DD</th><th>Win streak</th><th>Lose streak</th><th>Total R</th></tr></thead><tbody>' +
+        rows.map((r) => '<tr><td>' + r.name + '</td><td>' + (r.winRate != null ? r.winRate.toFixed(1) + '%' : '—') + '</td><td>' + (r.maxDrawdown > 0 ? '-' : '') + r.maxDrawdown + 'R</td><td>' + r.winningStreak + '</td><td>' + r.losingStreak + '</td><td>' + formatR(r.totalR) + '</td></tr>').join('') + '</tbody></table>';
       tableEl.hidden = false;
     }
   }
