@@ -596,7 +596,14 @@ function renderCalendar() {
   document.getElementById('monthYear').textContent =
     currentDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
+  // Compute monthly P/L from selected strategy for all weekdays (independent of grid so it's correct for every strategy)
   let monthlyTotalR = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = new Date(year, month, d);
+    if (!isWeekday(date)) continue;
+    const data = getDayResult(formatDateKey(date), selectedInstrument);
+    if (data) monthlyTotalR += data.totalR;
+  }
 
   const grid = document.getElementById('calendarGrid');
   if (!grid) return;
@@ -630,7 +637,6 @@ function renderCalendar() {
         if (selected) cell.classList.add('selected');
         if (!weekday) cell.classList.add('weekend');
         if (data) {
-          monthlyTotalR += data.totalR;
           cell.classList.add(data.totalR >= 0 ? 'profit' : 'loss');
           cell.innerHTML = `
             <span class="date-num">${dayNum}</span>
