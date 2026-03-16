@@ -930,14 +930,24 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
+
       const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
+      const localStrategies = loadStrategies();
+      const localDefault = localStrategies.find((s) => s.id === STRATEGY_DEFAULT_ID);
+      const defaultName = localDefault?.name || 'Default';
+
       if (Array.isArray(remoteStrategies) && remoteStrategies.length > 0) {
-        const hasDefault = remoteStrategies.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
-        strategies = hasDefault ? remoteStrategies : [{ id: STRATEGY_DEFAULT_ID, name: 'Default' }, ...remoteStrategies];
+        const hasDefaultRemote = remoteStrategies.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
+        const base = hasDefaultRemote ? remoteStrategies : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }, ...remoteStrategies];
+        // Merge any local name overrides (including renamed Default) over remote entries
+        strategies = base.map((s) => {
+          const local = localStrategies.find((ls) => ls.id === s.id);
+          return local ? { ...s, name: local.name } : s;
+        });
       } else {
-        strategies = loadStrategies();
-        if (!strategies.length) strategies = [{ id: STRATEGY_DEFAULT_ID, name: 'Default' }];
+        strategies = localStrategies.length ? localStrategies : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }];
       }
+
       saveStrategies(strategies);
     } else {
       dailyResults = loadDailyResults();
