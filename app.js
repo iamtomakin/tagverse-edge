@@ -730,46 +730,6 @@ function renderCalendar() {
     monthlyEl.textContent = formatR(monthlyTotalR);
     monthlyEl.className = 'pl-value ' + (monthlyTotalR === 0 ? 'neutral' : monthlyTotalR > 0 ? 'profit' : 'loss');
   }
-
-  const streakEl = document.getElementById('disciplineStreak');
-  if (streakEl) streakEl.textContent = 'Streak: ' + computeDisciplineStreak();
-  const scoreEl = document.getElementById('disciplineScore');
-  if (scoreEl) {
-    const score = computeDisciplineScore();
-    scoreEl.textContent = score != null ? 'Score: ' + score : 'Score: —';
-  }
-
-  const banner = document.getElementById('declarationBanner');
-  if (banner) {
-    const today = new Date();
-    const todayKey = formatDateKey(today);
-    const hasDecl = getDeclaration(todayKey, selectedInstrument);
-    const isWeekdayToday = isWeekday(today);
-    banner.hidden = false;
-    const bannerRight = banner.querySelector('.declaration-banner-right');
-    if (bannerRight) bannerRight.hidden = !isWeekdayToday;
-    document.querySelectorAll('.instrument-pill').forEach((pill) => {
-      const inst = pill.dataset.instrument;
-      const isSelected = inst === selectedInstrument;
-      pill.classList.toggle('selected', isSelected);
-      pill.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
-    });
-    const promptEl = document.getElementById('declarationPrompt');
-    const confirmedEl = document.getElementById('declarationConfirmed');
-    const confirmedTextEl = document.getElementById('declarationConfirmedText');
-    if (promptEl && confirmedEl && confirmedTextEl) {
-      if (hasDecl) {
-        promptEl.hidden = true;
-        confirmedEl.hidden = false;
-        const n = hasDecl.tradeCountPlanned;
-        const timeStr = formatDeclarationTime(hasDecl.createdAt);
-        confirmedTextEl.textContent = 'Planned: ' + n + ' trade' + (n === 1 ? '' : 's') + (timeStr ? ' · ' + timeStr : '');
-      } else {
-        promptEl.hidden = false;
-        confirmedEl.hidden = true;
-      }
-    }
-  }
 }
 
 function selectDate(date) {
@@ -807,29 +767,15 @@ function openLogModal(date) {
   const key = formatDateKey(logModalTargetDate);
   const modal = document.getElementById('logModal');
   const title = document.getElementById('logModalTitle');
-  const declareSection = document.getElementById('logModalDeclare');
   const outcomeSection = document.getElementById('logModalOutcome');
-  const plannedLine = document.getElementById('logModalPlanned');
   const comparisonLine = document.getElementById('logModalComparison');
-  const decl = getDeclaration(key, selectedInstrument);
   const past = isPastDate(logModalTargetDate);
   title.textContent = logModalTargetDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const instrumentLabel = document.getElementById('logModalInstrument');
   if (instrumentLabel) instrumentLabel.textContent = 'Logging for ' + selectedInstrument;
-  declareSection.hidden = past || !!decl;
-  outcomeSection.hidden = false;
+  if (outcomeSection) outcomeSection.hidden = false;
   comparisonLine.hidden = true;
   comparisonLine.textContent = '';
-  if (plannedLine) {
-    if (decl) {
-      const n = decl.tradeCountPlanned;
-      const timeStr = formatDeclarationTime(decl.createdAt);
-      plannedLine.textContent = 'Planned: ' + n + ' trade' + (n === 1 ? '' : 's') + (timeStr ? ' at ' + timeStr : '');
-      plannedLine.hidden = false;
-    } else {
-      plannedLine.hidden = true;
-    }
-  }
   modal.hidden = false;
 }
 
@@ -847,15 +793,6 @@ function saveDeclarationFromModal(tradeCountPlanned) {
   if (!logModalTargetDate) return;
   const key = formatDateKey(logModalTargetDate);
   setDeclaration(key, selectedInstrument, tradeCountPlanned);
-  document.getElementById('logModalDeclare').hidden = true;
-  const decl = getDeclaration(key, selectedInstrument);
-  const plannedLine = document.getElementById('logModalPlanned');
-  if (plannedLine && decl) {
-    const n = decl.tradeCountPlanned;
-    const timeStr = formatDeclarationTime(decl.createdAt);
-    plannedLine.textContent = 'Planned: ' + n + ' trade' + (n === 1 ? '' : 's') + (timeStr ? ' at ' + timeStr : '');
-    plannedLine.hidden = false;
-  }
   renderCalendar();
 }
 
@@ -864,17 +801,12 @@ function saveOutcomeFromModal(r) {
   const key = formatDateKey(logModalTargetDate);
   const totalR = Number(r);
   const tradeCount = totalR === 2 || totalR === -2 ? (totalR === 2 ? 1 : 2) : (totalR === 1 ? 2 : 1);
-  const decl = getDeclaration(key, selectedInstrument);
   setDayResult(key, selectedInstrument, totalR, tradeCount);
   const comparisonEl = document.getElementById('logModalComparison');
   if (comparisonEl) {
-    const planned = decl && decl.tradeCountPlanned;
-    const match = planned != null && planned === tradeCount;
-    comparisonEl.textContent = planned != null
-      ? (match ? 'Logged ' + tradeCount + ' trade' + (tradeCount === 1 ? '' : 's') + '. Matches plan.' : 'Logged ' + tradeCount + ' trade' + (tradeCount === 1 ? '' : 's') + '. Plan was ' + planned + ' trade' + (planned === 1 ? '' : 's') + '.')
-      : 'Logged ' + tradeCount + ' trade' + (tradeCount === 1 ? '' : 's') + '.';
     comparisonEl.hidden = false;
-    comparisonEl.classList.toggle('comparison-mismatch', planned != null && !match);
+    comparisonEl.textContent = 'Logged ' + tradeCount + ' trade' + (tradeCount === 1 ? '' : 's') + '.';
+    comparisonEl.classList.remove('comparison-mismatch');
     window._logModalCloseTimeout = setTimeout(closeLogModal, 1800);
   } else {
     closeLogModal();
@@ -1262,15 +1194,6 @@ document.addEventListener('DOMContentLoaded', () => {
       renderCalendar();
       if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
     });
-  });
-
-  document.getElementById('declareOne')?.addEventListener('click', () => {
-    setDeclaration(formatDateKey(new Date()), selectedInstrument, 1);
-    renderCalendar();
-  });
-  document.getElementById('declareTwo')?.addEventListener('click', () => {
-    setDeclaration(formatDateKey(new Date()), selectedInstrument, 2);
-    renderCalendar();
   });
 
   document.getElementById('logTodayBtn')?.addEventListener('click', () => {

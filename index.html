@@ -90,33 +90,11 @@
       <div class="calendar-container">
         <header class="monthly-summary">
           <p class="monthly-pl">Monthly P/L: <span id="monthlyPlValue" class="pl-value">-</span></p>
-          <p class="discipline-meta">
-            <span id="disciplineStreak" class="streak">Streak: 0</span>
-            <span id="disciplineScore" class="score">Score: —</span>
-          </p>
         </header>
         <div class="strategy-bar" role="group" aria-label="Strategy">
           <span class="strategy-bar-label">Strategy</span>
           <div id="strategyPills" class="strategy-pills"></div>
           <button type="button" id="addStrategyBtn" class="strategy-add-btn">+ Add strategy</button>
-        </div>
-        <div id="declarationBanner" class="declaration-banner" hidden>
-          <div class="instrument-pills" role="group" aria-label="Trade instrument">
-            <button type="button" class="instrument-pill selected" data-instrument="NQ" aria-pressed="true">NQ</button>
-            <button type="button" class="instrument-pill" data-instrument="YM" aria-pressed="false">YM</button>
-            <button type="button" class="instrument-pill" data-instrument="GC" aria-pressed="false">GC</button>
-            <button type="button" class="instrument-pill" data-instrument="ES" aria-pressed="false">ES</button>
-          </div>
-          <div class="declaration-banner-right">
-            <div id="declarationPrompt" class="declaration-prompt">
-              <span>Today's plan: 1 or 2 trades?</span>
-              <button type="button" id="declareOne" class="declare-btn">1</button>
-              <button type="button" id="declareTwo" class="declare-btn">2</button>
-            </div>
-            <div id="declarationConfirmed" class="declaration-confirmed" hidden>
-              <span id="declarationConfirmedText">Planned: 2 trades · 9:42 AM</span>
-            </div>
-          </div>
         </div>
         <nav class="calendar-nav">
           <button type="button" class="nav-arrow" id="prevMonth" aria-label="Previous month">&lt;</button>
@@ -148,14 +126,6 @@
       <div class="log-modal-content">
         <h2 id="logModalTitle">Log day</h2>
         <p id="logModalInstrument" class="log-modal-instrument" aria-live="polite">Logging for NQ</p>
-        <p id="logModalPlanned" class="log-modal-planned" hidden></p>
-        <div id="logModalDeclare" class="log-modal-section">
-          <p class="log-modal-label">Planned trades today</p>
-          <div class="log-modal-options">
-            <button type="button" class="log-option" data-value="1">1 trade</button>
-            <button type="button" class="log-option" data-value="2">2 trades</button>
-          </div>
-        </div>
         <p id="logModalComparison" class="log-modal-comparison" hidden></p>
         <div id="logModalOutcome" class="log-modal-section">
           <p class="log-modal-label">How did it go?</p>
