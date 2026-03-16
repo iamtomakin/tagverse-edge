@@ -413,6 +413,21 @@ function getDayResult(dateKey, instrument) {
   return byDate[instrument] || null;
 }
 
+/** Total R for a single day for the selected strategy (all instruments). Used for monthly P/L. */
+function getDayTotalRForStrategy(strategyId, dateKey) {
+  const bucket = dailyResults[strategyId];
+  if (!bucket || typeof bucket !== 'object') return 0;
+  const byDate = bucket[dateKey];
+  if (!byDate || typeof byDate !== 'object') return 0;
+  if (isLegacyDailyEntry(byDate)) return typeof byDate.totalR === 'number' ? byDate.totalR : 0;
+  let total = 0;
+  for (const inst of Object.keys(byDate)) {
+    const entry = byDate[inst];
+    if (entry && typeof entry.totalR === 'number') total += entry.totalR;
+  }
+  return total;
+}
+
 function computeWeeklyPl(year, month, weekNum, instrument) {
   const inst = instrument ?? selectedInstrument;
   const { start, end } = getWeekRange(year, month, weekNum);
@@ -596,13 +611,12 @@ function renderCalendar() {
   document.getElementById('monthYear').textContent =
     currentDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
-  // Compute monthly P/L from selected strategy for all weekdays (independent of grid so it's correct for every strategy)
+  // Compute monthly P/L from selected strategy: sum all instruments for each weekday (uses strategy bucket directly)
   let monthlyTotalR = 0;
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(year, month, d);
     if (!isWeekday(date)) continue;
-    const data = getDayResult(formatDateKey(date), selectedInstrument);
-    if (data) monthlyTotalR += data.totalR;
+    monthlyTotalR += getDayTotalRForStrategy(selectedStrategyId, formatDateKey(date));
   }
 
   const grid = document.getElementById('calendarGrid');
