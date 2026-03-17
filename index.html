@@ -147,32 +147,64 @@
     <main id="screen-analytics" class="screen" role="main" hidden>
       <div class="analytics-container">
         <h2 class="analytics-title">Performance</h2>
+
         <div class="analytics-period">
           <button type="button" class="period-btn" data-period="today">Today</button>
           <button type="button" class="period-btn active" data-period="month">This month</button>
           <button type="button" class="period-btn" data-period="week">This week</button>
           <button type="button" class="period-btn" data-period="custom">Custom</button>
         </div>
+
         <div class="analytics-custom-range" id="analyticsCustomRange" hidden>
           <label>From <input type="date" id="analyticsStartDate" /></label>
           <label>to <input type="date" id="analyticsEndDate" /></label>
           <button type="button" id="analyticsApplyRange">Apply</button>
         </div>
+
         <p id="analyticsFallbackNote" class="analytics-fallback-note" hidden></p>
-        <dl class="analytics-metrics">
-          <dt>Strategy</dt>
-          <dd id="metricStrategyName">—</dd>
-          <dt>Win rate</dt>
-          <dd id="metricWinRate">—</dd>
-          <dt>Max drawdown</dt>
-          <dd id="metricMaxDrawdown">—</dd>
-          <dt>Winning streak</dt>
-          <dd id="metricWinningStreak">—</dd>
-          <dt>Losing streak</dt>
-          <dd id="metricLosingStreak">—</dd>
-          <dt>Total R</dt>
-          <dd id="metricTotalR">—</dd>
-        </dl>
+
+        <section class="analytics-coach" aria-label="Dr Tom Akin tip">
+          <div class="analytics-coach-label">Dr Tom Akin</div>
+          <p class="analytics-coach-text" id="analyticsCoachText">
+            Discipline is your edge. Log your results so the maths can guide you.
+          </p>
+        </section>
+
+        <section class="analytics-main">
+          <div class="analytics-main-left">
+            <div class="analytics-kpis" aria-label="Key performance metrics">
+              <article class="kpi-card">
+                <h3 class="kpi-label">Strategy</h3>
+                <p class="kpi-value" id="metricStrategyName">—</p>
+              </article>
+              <article class="kpi-card">
+                <h3 class="kpi-label">Total R</h3>
+                <p class="kpi-value" id="metricTotalR">—</p>
+              </article>
+              <article class="kpi-card">
+                <h3 class="kpi-label">Win rate</h3>
+                <p class="kpi-value" id="metricWinRate">—</p>
+              </article>
+              <article class="kpi-card">
+                <h3 class="kpi-label">Max drawdown</h3>
+                <p class="kpi-value" id="metricMaxDrawdown">—</p>
+              </article>
+              <article class="kpi-card">
+                <h3 class="kpi-label">Winning streak</h3>
+                <p class="kpi-value" id="metricWinningStreak">—</p>
+              </article>
+              <article class="kpi-card">
+                <h3 class="kpi-label">Losing streak</h3>
+                <p class="kpi-value" id="metricLosingStreak">—</p>
+              </article>
+            </div>
+
+            <section class="analytics-summary" aria-label="Period summary">
+              <p id="analyticsSummaryText" class="analytics-summary-text"></p>
+            </section>
+          </div>
+        </section>
+
         <section class="analytics-compare" aria-label="Compare strategies">
           <h3 class="analytics-compare-title">Compare strategies</h3>
           <div id="compareStrategyCheckboxes" class="compare-strategy-checkboxes"></div>

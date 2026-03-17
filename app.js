@@ -1476,6 +1476,52 @@ document.addEventListener('DOMContentLoaded', () => {
     set('metricWinningStreak', results.length ? String(m.winningStreak) : '—');
     set('metricLosingStreak', results.length ? String(m.losingStreak) : '—');
     set('metricTotalR', results.length ? formatR(m.totalR) : '—');
+
+    const summaryEl = document.getElementById('analyticsSummaryText');
+    const coachEl = document.getElementById('analyticsCoachText');
+
+    if (!results.length) {
+      if (fallbackEl) {
+        fallbackEl.hidden = false;
+        fallbackEl.textContent = 'No trades logged in this period yet. Log at least one day of results to unlock analytics.';
+      }
+      if (summaryEl) {
+        summaryEl.textContent = '';
+      }
+      if (coachEl) {
+        coachEl.textContent = 'Discipline is your edge. Log your results so the maths can guide you.';
+      }
+      if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+      return;
+    }
+
+    const greenDays = results.filter((r) => r.totalR > 0).length;
+    const redDays = results.filter((r) => r.totalR < 0).length;
+    const totalDays = results.length;
+
+    if (summaryEl) {
+      summaryEl.textContent = `${greenDays} green day${greenDays === 1 ? '' : 's'}, ${redDays} red day${redDays === 1 ? '' : 's'} out of ${totalDays}.`;
+    }
+
+    if (coachEl) {
+      let message = '';
+      const absTotalR = Math.abs(m.totalR);
+
+      if (m.losingStreak >= 3 || redDays > greenDays) {
+        message = 'Discipline is heavy for an hour. Regret is heavy for a lifetime. Choose your weights.';
+      } else if (m.maxDrawdown > Math.max(5, absTotalR)) {
+        message = 'Trust the maths — your drawdown is outweighing your gains. Cut losses quickly and keep risk per trade consistent.';
+      } else if (m.winRate >= 55 && m.totalR < 5) {
+        message = 'Think horizontally — your win rate is solid; focus on letting winners run and scaling size gradually so the maths work in your favour.';
+      } else if (m.totalR >= 5 && m.winRate >= 55 && m.maxDrawdown <= 3) {
+        message = 'Trust the maths — your numbers this period show an edge. Keep the same discipline; don’t change what’s working.';
+      } else {
+        message = 'Think horizontally — compare win rate and drawdown together. Steady progress beats big swings.';
+      }
+
+      coachEl.textContent = message;
+    }
+
     if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
   }
   window.renderAnalytics = renderAnalytics;
