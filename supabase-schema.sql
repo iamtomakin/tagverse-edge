@@ -98,3 +98,87 @@ alter table public.declarations add column if not exists strategy_id uuid refere
 -- alter table public.daily_results drop constraint if exists daily_results_user_id_date_key_instrument_key;
 -- alter table public.daily_results add unique(user_id, strategy_id, date_key, instrument);
 -- Same for declarations. Run after backfilling strategy_id for all rows.
+
+-- Profiles: per-user public profile (username, optional avatar/bio)
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  username text not null unique,
+  avatar_url text,
+  bio text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.profiles enable row level security;
+
+drop policy if exists "Profiles are readable by everyone" on public.profiles;
+create policy "Profiles are readable by everyone"
+  on public.profiles for select
+  using (true);
+
+drop policy if exists "Users can upsert own profile" on public.profiles;
+create policy "Users can upsert own profile"
+  on public.profiles for all
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
+
+-- Shared calendars/posts shown on Community page
+create table if not exists public.shared_calendars (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  description text,
+  snapshot_token text not null,
+  topic text default 'general',
+  created_at timestamptz not null default now(),
+  is_public boolean not null default true
+);
+
+alter table public.shared_calendars enable row level security;
+
+drop policy if exists "Shared calendars are public" on public.shared_calendars;
+create policy "Shared calendars are public"
+  on public.shared_calendars for select
+  using (is_public = true);
+
+drop policy if exists "Users can manage own shared calendars" on public.shared_calendars;
+create policy "Users can manage own shared calendars"
+  on public.shared_calendars for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- Comments on shared calendars
+create table if not exists public.comments (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.shared_calendars(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  body text not null,
+  created_at timestamptz not null default now(),
+  is_deleted boolean not null default false
+);
+
+alter table public.comments enable row level security;
+
+drop policy if exists "Comments are readable on public posts" on public.comments;
+create policy "Comments are readable on public posts"
+  on public.comments for select
+  using (
+    exists (
+      select 1 from public.shared_calendars sc
+      where sc.id = post_id and sc.is_public = true
+    )
+  );
+
+drop policy if exists "Users can insert own comments" on public.comments;
+create policy "Users can insert own comments"
+  on public.comments for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Users can update own comments" on public.comments;
+create policy "Users can update own comments"
+  on public.comments for update
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can delete own comments" on public.comments;
+create policy "Users can delete own comments"
+  on public.comments for delete
+  using (auth.uid() = user_id);

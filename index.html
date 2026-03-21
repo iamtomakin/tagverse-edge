@@ -16,7 +16,7 @@
       <nav class="main-nav" aria-label="Main">
         <button type="button" class="nav-tab active" data-screen="calendar" aria-current="page">Calendar</button>
         <button type="button" class="nav-tab" data-screen="analytics">Analytics</button>
-        <button type="button" class="nav-tab" data-screen="share">Share</button>
+        <button type="button" class="nav-tab" data-screen="community">Community</button>
         <button type="button" class="nav-tab" data-screen="settings">Settings</button>
       </nav>
       <div class="auth-bar" aria-live="polite">
@@ -213,22 +213,84 @@
       </div>
     </main>
 
-    <!-- Screen 4: Share -->
-    <main id="screen-share" class="screen" role="main" hidden>
-      <div class="share-container">
-        <h2 class="share-title">Share snapshot</h2>
-        <div class="share-period">
-          <label>Period</label>
-          <select id="sharePeriod">
-            <option value="month">This month</option>
-          </select>
-        </div>
-        <button type="button" class="share-generate-btn" id="shareGenerateBtn">Generate link</button>
-        <div id="shareLinkBox" class="share-link-box" hidden>
-          <label>Link (read-only, no login)</label>
-          <input type="text" id="shareLinkInput" readonly />
-          <button type="button" id="shareCopyBtn">Copy</button>
-        </div>
+    <!-- Screen 4: Community -->
+    <main id="screen-community" class="screen" role="main" hidden>
+      <div class="community-layout">
+        <aside class="community-sidebar" aria-label="Community navigation">
+          <div class="community-sidebar-section">
+            <h2 class="community-sidebar-title">Community</h2>
+            <nav class="community-nav">
+              <button type="button" class="community-nav-item community-nav-item-active" data-community-view="home">Home</button>
+              <button type="button" class="community-nav-item" data-community-view="mine">My posts</button>
+              <button type="button" class="community-nav-item" data-community-view="search">Search</button>
+            </nav>
+          </div>
+          <div class="community-sidebar-section">
+            <h3 class="community-sidebar-subtitle">Topics</h3>
+            <nav class="community-nav community-nav-topics">
+              <button type="button" class="community-nav-item" data-community-topic="general">General</button>
+              <button type="button" class="community-nav-item" data-community-topic="setups">Setups</button>
+              <button type="button" class="community-nav-item" data-community-topic="all">All topics</button>
+            </nav>
+          </div>
+        </aside>
+
+        <section class="community-main" aria-label="Community feed">
+          <header class="community-header">
+            <div>
+              <h2 class="community-title">Home</h2>
+              <p class="community-subtitle">See how other traders are using their edge.</p>
+            </div>
+            <button type="button" class="community-new-post-btn" id="communityNewPostBtn">New post</button>
+          </header>
+          <p id="communityPostMessage" class="community-post-message" role="status" aria-live="polite"></p>
+
+          <section class="community-feed-controls" aria-label="Feed filters">
+            <label class="community-sort-label">
+              Sort by
+              <select id="communitySortSelect" class="community-sort-select">
+                <option value="newest">Newest</option>
+                <option value="most_commented">Most commented</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="community-feed" id="communityFeed" aria-label="Community posts">
+            <!-- Placeholder example card; will be replaced by dynamic content later -->
+            <article class="community-post-card">
+              <header class="community-post-header">
+                <div class="community-post-author">
+                  <div class="community-avatar">TA</div>
+                  <div class="community-post-meta">
+                    <div class="community-post-author-line">
+                      <span class="community-username">@drtom_akins</span>
+                      <span class="community-badge">Creator</span>
+                      <span class="community-tag">General</span>
+                    </div>
+                    <span class="community-post-time">3m ago</span>
+                  </div>
+                </div>
+              </header>
+              <div class="community-post-body">
+                <h3 class="community-post-title">March: 2-trade rule run</h3>
+                <p class="community-post-description">Focused on two trades per day and cutting losers fast.</p>
+              </div>
+              <div class="community-post-stats">
+                <span>+14R this month</span>
+                <span>100% win rate</span>
+                <span>8 green / 0 red days</span>
+              </div>
+              <footer class="community-post-footer">
+                <button type="button" class="community-post-link">View snapshot</button>
+                <div class="community-post-footer-meta">
+                  <span>0 comments</span>
+                </div>
+              </footer>
+            </article>
+
+            <p class="community-empty-note">When traders share their calendars, they will show up here.</p>
+          </section>
+        </section>
       </div>
     </main>
 
@@ -249,6 +311,30 @@
         <div class="settings-section">
           <h3 class="settings-subtitle">Account</h3>
           <p class="settings-meta" id="settingsAccountMeta">Sign in with email to sync your data.</p>
+        </div>
+        <div class="settings-section">
+          <h3 class="settings-subtitle">Profile</h3>
+          <label class="settings-label" for="settingsUsername">Username</label>
+          <input type="text" id="settingsUsername" class="settings-input" placeholder="@your_handle" />
+          <label class="settings-label" for="settingsBio">Bio (optional)</label>
+          <textarea id="settingsBio" class="settings-textarea" rows="3" placeholder="Short line about your trading focus."></textarea>
+          <div class="settings-actions">
+            <button type="button" id="settingsSaveProfile" class="settings-primary-btn">Save profile</button>
+            <p class="settings-meta" id="settingsProfileMessage"></p>
+          </div>
+        </div>
+        <div class="settings-section">
+          <h3 class="settings-subtitle">Password</h3>
+          <label class="settings-label" for="settingsCurrentPassword">Current password</label>
+          <input type="password" id="settingsCurrentPassword" class="settings-input" autocomplete="current-password" />
+          <label class="settings-label" for="settingsNewPassword">New password</label>
+          <input type="password" id="settingsNewPassword" class="settings-input" autocomplete="new-password" />
+          <label class="settings-label" for="settingsConfirmPassword">Confirm new password</label>
+          <input type="password" id="settingsConfirmPassword" class="settings-input" autocomplete="new-password" />
+          <div class="settings-actions">
+            <button type="button" id="settingsChangePassword" class="settings-primary-btn">Change password</button>
+            <p class="settings-meta" id="settingsPasswordMessage"></p>
+          </div>
         </div>
       </div>
     </main>

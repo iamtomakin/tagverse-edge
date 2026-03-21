@@ -15,6 +15,9 @@ const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || '';
 let supabaseClient = null;
 let currentUser = null;
 let currentMode = MODES.LIVE;
+let currentProfile = null;
+let lastShareToken = null;
+let lastSharePayload = null;
 
 function isSupabaseEnabled() {
   return typeof window.supabase !== 'undefined' && SUPABASE_URL && SUPABASE_ANON_KEY;
@@ -26,6 +29,23 @@ function initSupabase() {
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   }
   return supabaseClient;
+}
+
+async function fetchCurrentProfile(userId) {
+  const supa = initSupabase();
+  if (!supa || !userId) return null;
+  const { data, error } = await supa.from('profiles').select('*').eq('id', userId).maybeSingle();
+  if (error) return null;
+  return data;
+}
+
+async function upsertProfile(userId, fields) {
+  const supa = initSupabase();
+  if (!supa || !userId) return { error: new Error('Supabase not available') };
+  const payload = { id: userId, ...fields };
+  const { data, error } = await supa.from('profiles').upsert(payload).select().maybeSingle();
+  if (!error) currentProfile = data;
+  return { data, error };
 }
 
 function loadCurrentMode() {
@@ -255,18 +275,74 @@ function saveDailyResults(data) {
   } catch (_) {}
 }
 
-function countDailyEntries(data) {
-  let n = 0;
-  if (!data || typeof data !== 'object') return n;
-  for (const sid of Object.keys(data)) {
-    const b = data[sid];
-    if (b && typeof b === 'object')
-      for (const dateKey of Object.keys(b)) {
-        const byInst = b[dateKey];
-        if (byInst && typeof byInst === 'object') n += Object.keys(byInst).length;
-      }
+/** Deep clone for calendar data (JSON-safe). */
+function deepCloneData(obj) {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch (_) {
+    return {};
   }
-  return n;
+}
+
+/**
+ * Cloud-first: start from remote (Supabase). Remote wins on conflicts.
+ * Local-only cells (not present in remote) are merged in and uploaded.
+ */
+function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) {
+  const merged = deepCloneData(remoteResults);
+  for (const sid of Object.keys(localResults || {})) {
+    const bucket = localResults[sid];
+    if (!bucket || typeof bucket !== 'object') continue;
+    if (!merged[sid]) merged[sid] = {};
+    for (const dateKey of Object.keys(bucket)) {
+      const byDate = bucket[dateKey];
+      if (!byDate || typeof byDate !== 'object') continue;
+      if (!merged[sid][dateKey]) merged[sid][dateKey] = {};
+      const normalized = isLegacyDailyEntry(byDate) ? migrateDailyResults({ [dateKey]: byDate }) : { [dateKey]: byDate };
+      const byDateNorm = normalized[dateKey];
+      if (!byDateNorm || typeof byDateNorm !== 'object') continue;
+      for (const inst of Object.keys(byDateNorm)) {
+        const entry = byDateNorm[inst];
+        if (!entry || typeof entry !== 'object') continue;
+        if (!merged[sid][dateKey][inst]) {
+          merged[sid][dateKey][inst] = { ...entry };
+          if (userId) persistDayResultToSupabase(userId, sid, dateKey, inst, merged[sid][dateKey][inst]);
+        }
+      }
+    }
+  }
+  return merged;
+}
+
+/**
+ * Same as mergeDailyResultsCloudFirst for declarations.
+ */
+function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, userId) {
+  const merged = deepCloneData(remoteDeclarations);
+  for (const sid of Object.keys(localDeclarations || {})) {
+    const bucket = localDeclarations[sid];
+    if (!bucket || typeof bucket !== 'object') continue;
+    if (!merged[sid]) merged[sid] = {};
+    for (const dateKey of Object.keys(bucket)) {
+      const byDate = bucket[dateKey];
+      if (!byDate || typeof byDate !== 'object') continue;
+      if (!merged[sid][dateKey]) merged[sid][dateKey] = {};
+      const normalized = isLegacyDeclarationEntry(byDate) ? migrateDeclarations({ [dateKey]: byDate }) : { [dateKey]: byDate };
+      const byDateNorm = normalized[dateKey];
+      if (!byDateNorm || typeof byDateNorm !== 'object') continue;
+      for (const inst of Object.keys(byDateNorm)) {
+        const entry = byDateNorm[inst];
+        if (!entry || typeof entry !== 'object') continue;
+        if (!merged[sid][dateKey][inst]) {
+          merged[sid][dateKey][inst] = { ...entry };
+          if (userId) {
+            persistDeclarationToSupabase(userId, sid, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
+          }
+        }
+      }
+    }
+  }
+  return merged;
 }
 
 function saveDeclarations(data) {
@@ -603,6 +679,35 @@ function computeDisciplineScore(instrument) {
   return Math.round((compliant / declared) * 100);
 }
 
+/** Build snapshot token + payload for share/community; updates localStorage tokens and lastShareToken / lastSharePayload. */
+function buildSnapshotTokenForPeriod(periodVal) {
+  const key = periodVal === 'week' || periodVal === 'today' ? periodVal : 'month';
+  const results = getResultsInRange(key);
+  const totalR = results.reduce((s, r) => s + r.totalR, 0);
+  const streak = computeDisciplineStreak();
+  const score = computeDisciplineScore();
+  const payload = {
+    period: periodVal,
+    totalR,
+    streak,
+    score: score != null ? score : null,
+    daysLogged: results.length,
+    greenDays: results.filter((r) => r.totalR > 0).length
+  };
+  const token = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  let tokens = {};
+  try {
+    tokens = JSON.parse(localStorage.getItem(STORAGE_KEYS.shareTokens) || '{}');
+  } catch (_) {}
+  tokens[token] = { createdAt: Date.now(), payload };
+  try {
+    localStorage.setItem(STORAGE_KEYS.shareTokens, JSON.stringify(tokens));
+  } catch (_) {}
+  lastShareToken = token;
+  lastSharePayload = payload;
+  return { token, payload };
+}
+
 function updateAuthUI() {
   const statusEl = document.getElementById('authStatus');
   const loginButton = document.getElementById('loginButton');
@@ -610,11 +715,12 @@ function updateAuthUI() {
   const accountMeta = document.getElementById('settingsAccountMeta');
   if (!statusEl || !loginButton || !logoutButton) return;
   if (currentUser) {
-    const email = currentUser.email || 'Signed in';
-    statusEl.textContent = email;
+    const email = currentUser.email || '';
+    const displayName = (currentProfile && currentProfile.username) || email || 'Signed in';
+    statusEl.textContent = displayName;
     loginButton.hidden = true;
     logoutButton.hidden = false;
-    if (accountMeta) accountMeta.textContent = 'Signed in as ' + email + '. Your data is synced to the cloud.';
+    if (accountMeta) accountMeta.textContent = 'Signed in as ' + displayName + '. Your data is synced to the cloud.';
   } else {
     statusEl.textContent = 'Not signed in';
     loginButton.hidden = false;
@@ -636,6 +742,7 @@ function showScreen(screenId) {
   });
   if (screenId === 'calendar') renderCalendar();
   if (screenId === 'analytics' && typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  if (screenId === 'community' && typeof window.renderCommunityFeed === 'function') window.renderCommunityFeed();
 }
 
 function renderCalendar() {
@@ -818,48 +925,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function applyAuthState() {
     if (currentUser) {
-      // Always start from local; merge remote INTO local per date/instrument so we never wipe local data
+      // Cloud-first: Supabase is source of truth; remote wins on conflicts.
+      // Local-only rows (e.g. another device not yet synced) are merged in and uploaded.
       const localResults = loadDailyResults();
       const localDeclarations = loadDeclarations();
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
       const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
-      dailyResults = { ...localResults };
-      for (const sid of Object.keys(remoteResults)) {
-        const remoteBucket = remoteResults[sid];
-        if (!remoteBucket || typeof remoteBucket !== 'object') continue;
-        if (!dailyResults[sid]) dailyResults[sid] = {};
-        for (const dateKey of Object.keys(remoteBucket)) {
-          const remoteByDate = remoteBucket[dateKey];
-          if (!remoteByDate || typeof remoteByDate !== 'object') continue;
-          if (!dailyResults[sid][dateKey]) dailyResults[sid][dateKey] = {};
-          for (const inst of Object.keys(remoteByDate)) {
-            const entry = remoteByDate[inst];
-            if (entry && typeof entry === 'object') dailyResults[sid][dateKey][inst] = entry;
-          }
-        }
-      }
-      declarations = { ...localDeclarations };
-      for (const sid of Object.keys(remoteDeclarations)) {
-        const remoteBucket = remoteDeclarations[sid];
-        if (!remoteBucket || typeof remoteBucket !== 'object') continue;
-        if (!declarations[sid]) declarations[sid] = {};
-        for (const dateKey of Object.keys(remoteBucket)) {
-          const remoteByDate = remoteBucket[dateKey];
-          if (!remoteByDate || typeof remoteByDate !== 'object') continue;
-          if (!declarations[sid][dateKey]) declarations[sid][dateKey] = {};
-          for (const inst of Object.keys(remoteByDate)) {
-            const entry = remoteByDate[inst];
-            if (entry && typeof entry === 'object') declarations[sid][dateKey][inst] = entry;
-          }
-        }
-      }
-      // Never persist fewer entries than we loaded from localStorage
-      const localCount = countDailyEntries(localResults);
-      const mergedCount = countDailyEntries(dailyResults);
-      if (mergedCount < localCount) {
-        dailyResults = localResults;
-        declarations = localDeclarations;
-      }
+      dailyResults = mergeDailyResultsCloudFirst(remoteResults, localResults, currentUser.id);
+      declarations = mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, currentUser.id);
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
 
@@ -881,15 +954,19 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       saveStrategies(strategies);
+
+      currentProfile = await fetchCurrentProfile(currentUser.id);
     } else {
       dailyResults = loadDailyResults();
       declarations = loadDeclarations();
       strategies = loadStrategies();
+      currentProfile = null;
     }
     selectedStrategyId = loadSelectedStrategyId();
     if (!strategies.some((s) => s.id === selectedStrategyId)) selectedStrategyId = strategies[0]?.id || STRATEGY_DEFAULT_ID;
     saveSelectedStrategyId(selectedStrategyId);
     updateAuthUI();
+    hydrateProfileSettings();
     if (typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
     renderCalendar();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
@@ -1055,6 +1132,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const authModalSubmit = document.getElementById('authModalSubmit');
   const authModalCancel = document.getElementById('authModalCancel');
   const authModalSwitchMode = document.getElementById('authModalSwitchMode');
+  const settingsUsernameInput = document.getElementById('settingsUsername');
+  const settingsBioInput = document.getElementById('settingsBio');
+  const settingsSaveProfileBtn = document.getElementById('settingsSaveProfile');
+  const settingsProfileMessage = document.getElementById('settingsProfileMessage');
+  const settingsCurrentPassword = document.getElementById('settingsCurrentPassword');
+  const settingsNewPassword = document.getElementById('settingsNewPassword');
+  const settingsConfirmPassword = document.getElementById('settingsConfirmPassword');
+  const settingsChangePasswordBtn = document.getElementById('settingsChangePassword');
+  const settingsPasswordMessage = document.getElementById('settingsPasswordMessage');
 
   if (loginButton) loginButton.textContent = 'Sign in with email';
 
@@ -1183,6 +1269,91 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!supaClient) return;
       await supaClient.auth.signOut();
     });
+  }
+
+  if (settingsSaveProfileBtn) {
+    settingsSaveProfileBtn.addEventListener('click', async () => {
+      if (!currentUser) {
+        if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to save your profile.';
+        return;
+      }
+      const username = (settingsUsernameInput?.value || '').trim();
+      const bio = (settingsBioInput?.value || '').trim();
+      if (!username) {
+        if (settingsProfileMessage) settingsProfileMessage.textContent = 'Username cannot be empty.';
+        return;
+      }
+      settingsSaveProfileBtn.disabled = true;
+      if (settingsProfileMessage) settingsProfileMessage.textContent = '';
+      const { error } = await upsertProfile(currentUser.id, { username, bio: bio || null });
+      settingsSaveProfileBtn.disabled = false;
+      if (error) {
+        settingsProfileMessage.textContent = error.message || 'Could not save profile.';
+        return;
+      }
+      if (settingsProfileMessage) settingsProfileMessage.textContent = 'Profile updated.';
+      updateAuthUI();
+    });
+  }
+
+  if (settingsChangePasswordBtn) {
+    settingsChangePasswordBtn.addEventListener('click', async () => {
+      if (!currentUser) {
+        if (settingsPasswordMessage) settingsPasswordMessage.textContent = 'Sign in to change your password.';
+        return;
+      }
+      const current = settingsCurrentPassword?.value || '';
+      const next = settingsNewPassword?.value || '';
+      const confirm = settingsConfirmPassword?.value || '';
+      if (!current || !next || !confirm) {
+        if (settingsPasswordMessage) settingsPasswordMessage.textContent = 'Fill in all password fields.';
+        return;
+      }
+      if (next !== confirm) {
+        if (settingsPasswordMessage) settingsPasswordMessage.textContent = 'New passwords do not match.';
+        return;
+      }
+      if (next.length < 6) {
+        if (settingsPasswordMessage) settingsPasswordMessage.textContent = 'New password must be at least 6 characters.';
+        return;
+      }
+      const supaClient = initSupabase();
+      if (!supaClient) return;
+      settingsChangePasswordBtn.disabled = true;
+      if (settingsPasswordMessage) settingsPasswordMessage.textContent = '';
+      const { data: signInData, error: signInError } = await supaClient.auth.signInWithPassword({
+        email: currentUser.email,
+        password: current
+      });
+      if (signInError || !signInData.session) {
+        settingsChangePasswordBtn.disabled = false;
+        if (settingsPasswordMessage) settingsPasswordMessage.textContent = 'Current password is incorrect.';
+        return;
+      }
+      const { error } = await supaClient.auth.updateUser({ password: next });
+      settingsChangePasswordBtn.disabled = false;
+      if (error) {
+        if (settingsPasswordMessage) settingsPasswordMessage.textContent = error.message || 'Could not change password.';
+        return;
+      }
+      if (settingsPasswordMessage) settingsPasswordMessage.textContent = 'Password changed.';
+      if (settingsCurrentPassword) settingsCurrentPassword.value = '';
+      if (settingsNewPassword) settingsNewPassword.value = '';
+      if (settingsConfirmPassword) settingsConfirmPassword.value = '';
+    });
+  }
+
+  function hydrateProfileSettings() {
+    if (!settingsUsernameInput || !settingsBioInput) return;
+    if (!currentUser) {
+      settingsUsernameInput.value = '';
+      settingsBioInput.value = '';
+      if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to edit your profile.';
+      return;
+    }
+    settingsUsernameInput.value = currentProfile?.username || '';
+    settingsBioInput.value = currentProfile?.bio || '';
+    if (settingsProfileMessage) settingsProfileMessage.textContent = '';
   }
 
   document.querySelectorAll('.instrument-pill').forEach((pill) => {
@@ -1576,35 +1747,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.renderCompareStrategies = renderCompareStrategies;
 
+  const sharePostCommunityBtn = document.getElementById('sharePostCommunityBtn');
+  const shareCommunityMessage = document.getElementById('shareCommunityMessage');
+
   document.getElementById('shareGenerateBtn')?.addEventListener('click', () => {
     const periodVal = document.getElementById('sharePeriod')?.value || 'month';
-    const key = periodVal === 'week' || periodVal === 'today' ? periodVal : 'month';
-    const results = getResultsInRange(key);
-    const totalR = results.reduce((s, r) => s + r.totalR, 0);
-    const streak = computeDisciplineStreak();
-    const score = computeDisciplineScore();
-    const payload = {
-      period: periodVal,
-      totalR,
-      streak,
-      score: score != null ? score : null,
-      daysLogged: results.length,
-      greenDays: results.filter((r) => r.totalR > 0).length,
-    };
-    const token = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-    let tokens = {};
-    try {
-      tokens = JSON.parse(localStorage.getItem(STORAGE_KEYS.shareTokens) || '{}');
-    } catch (_) {}
-    tokens[token] = { createdAt: Date.now(), payload };
-    localStorage.setItem(STORAGE_KEYS.shareTokens, JSON.stringify(tokens));
-
+    const { token } = buildSnapshotTokenForPeriod(periodVal);
     const base = window.location.origin + window.location.pathname.replace(/index\.html?$/, '');
     const link = (base.endsWith('/') ? base : base + '/') + 'share.html?t=' + encodeURIComponent(token);
     const linkBox = document.getElementById('shareLinkBox');
     const input = document.getElementById('shareLinkInput');
     if (input) input.value = link;
     if (linkBox) linkBox.hidden = false;
+
+    if (sharePostCommunityBtn) sharePostCommunityBtn.hidden = false;
+    if (shareCommunityMessage) shareCommunityMessage.textContent = '';
   });
 
   document.getElementById('shareCopyBtn')?.addEventListener('click', () => {
@@ -1614,6 +1771,151 @@ document.addEventListener('DOMContentLoaded', () => {
       document.execCommand('copy');
     }
   });
+
+  const communityFeedEl = document.getElementById('communityFeed');
+  const communitySortSelect = document.getElementById('communitySortSelect');
+  const communityNewPostBtn = document.getElementById('communityNewPostBtn');
+  const communityPostMessage = document.getElementById('communityPostMessage');
+
+  async function postSnapshotToCommunity() {
+    if (!currentUser) {
+      if (typeof openAuthModal === 'function') openAuthModal();
+      if (communityPostMessage) communityPostMessage.textContent = 'Sign in to post to the community.';
+      if (shareCommunityMessage) shareCommunityMessage.textContent = 'Sign in to post to the community.';
+      return;
+    }
+    if (!lastShareToken) buildSnapshotTokenForPeriod('month');
+    if (!lastShareToken) {
+      if (communityPostMessage) communityPostMessage.textContent = 'Could not build snapshot.';
+      if (shareCommunityMessage) shareCommunityMessage.textContent = 'Could not build snapshot.';
+      return;
+    }
+    const defaultTitle = `Snapshot: ${lastSharePayload?.period || 'recent performance'}`;
+    const title = (prompt('Post title', defaultTitle) || '').trim();
+    if (!title) return;
+    const description = (prompt('Description (optional)', '') || '').trim();
+    const supa = initSupabase();
+    if (!supa) return;
+    if (sharePostCommunityBtn) sharePostCommunityBtn.disabled = true;
+    if (communityPostMessage) communityPostMessage.textContent = '';
+    if (shareCommunityMessage) shareCommunityMessage.textContent = '';
+    const { error } = await supa.from('shared_calendars').insert({
+      user_id: currentUser.id,
+      title,
+      description: description || null,
+      snapshot_token: lastShareToken,
+      topic: 'general',
+      is_public: true
+    });
+    if (sharePostCommunityBtn) sharePostCommunityBtn.disabled = false;
+    if (error) {
+      const err = error.message || 'Could not post to community.';
+      if (communityPostMessage) communityPostMessage.textContent = err;
+      if (shareCommunityMessage) shareCommunityMessage.textContent = err;
+      return;
+    }
+    if (communityPostMessage) communityPostMessage.textContent = 'Posted to community.';
+    if (shareCommunityMessage) shareCommunityMessage.textContent = 'Posted to community.';
+    if (typeof window.renderCommunityFeed === 'function') window.renderCommunityFeed();
+  }
+
+  async function fetchCommunityFeed(sortKey) {
+    const supa = initSupabase();
+    if (!supa) return [];
+    let query = supa
+      .from('shared_calendars')
+      .select('id, title, description, topic, created_at, snapshot_token, profiles!inner(username, avatar_url)')
+      .eq('is_public', true);
+    if (sortKey === 'most_commented') {
+      query = query.order('created_at', { ascending: false }); // Placeholder: real implementation could join comment counts
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
+    const { data, error } = await query.limit(20);
+    if (error) return [];
+    return data || [];
+  }
+
+  function renderCommunityFeedSkeleton() {
+    if (!communityFeedEl) return;
+    communityFeedEl.innerHTML = '<p class="community-empty-note">Loading community posts…</p>';
+  }
+
+  function renderCommunityFeedEmpty() {
+    if (!communityFeedEl) return;
+    communityFeedEl.innerHTML = '<p class="community-empty-note">When traders share their calendars, they will show up here.</p>';
+  }
+
+  function renderCommunityFeedFromRows(rows) {
+    if (!communityFeedEl) return;
+    if (!rows.length) {
+      renderCommunityFeedEmpty();
+      return;
+    }
+    communityFeedEl.innerHTML = '';
+    rows.forEach((row) => {
+      const card = document.createElement('article');
+      card.className = 'community-post-card';
+      const username = row.profiles?.username || 'Trader';
+      const createdAt = row.created_at ? new Date(row.created_at) : null;
+      const timeLabel = createdAt ? createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      const initials = username.replace('@', '').split(/\s|_/).filter(Boolean).map((p) => p[0].toUpperCase()).slice(0, 2).join('') || 'TV';
+      card.innerHTML = `
+        <header class="community-post-header">
+          <div class="community-post-author">
+            <div class="community-avatar">${initials}</div>
+            <div class="community-post-meta">
+              <div class="community-post-author-line">
+                <span class="community-username">@${username.replace(/^@/, '')}</span>
+                <span class="community-tag">${row.topic || 'general'}</span>
+              </div>
+              <span class="community-post-time">${timeLabel}</span>
+            </div>
+          </div>
+        </header>
+        <div class="community-post-body">
+          <h3 class="community-post-title">${row.title}</h3>
+          <p class="community-post-description">${row.description || ''}</p>
+        </div>
+        <div class="community-post-stats">
+          <span>Snapshot period: ${row.snapshot_token ? 'shared' : '—'}</span>
+        </div>
+        <footer class="community-post-footer">
+          <button type="button" class="community-post-link" data-post-id="${row.id}">View snapshot</button>
+          <div class="community-post-footer-meta">
+            <span>Comments coming soon</span>
+          </div>
+        </footer>
+      `;
+      communityFeedEl.appendChild(card);
+    });
+  }
+
+  async function renderCommunityFeed() {
+    const sortKey = communitySortSelect?.value || 'newest';
+    renderCommunityFeedSkeleton();
+    const rows = await fetchCommunityFeed(sortKey);
+    renderCommunityFeedFromRows(rows);
+  }
+  window.renderCommunityFeed = renderCommunityFeed;
+
+  if (communitySortSelect) {
+    communitySortSelect.addEventListener('change', () => {
+      renderCommunityFeed();
+    });
+  }
+
+  if (communityNewPostBtn) {
+    communityNewPostBtn.addEventListener('click', () => {
+      postSnapshotToCommunity();
+    });
+  }
+
+  if (sharePostCommunityBtn) {
+    sharePostCommunityBtn.addEventListener('click', () => {
+      postSnapshotToCommunity();
+    });
+  }
 
   const themeSelect = document.getElementById('settingsTheme');
   if (themeSelect) {
@@ -1631,4 +1933,5 @@ document.addEventListener('DOMContentLoaded', () => {
   selectedDate = new Date();
   if (!supa && typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
   showScreen('calendar');
+  if (typeof window.renderCommunityFeed === 'function') window.renderCommunityFeed();
 });
