@@ -286,9 +286,9 @@ function deepCloneData(obj) {
 
 /**
  * Cloud-first: start from remote (Supabase). Remote wins on conflicts.
- * Local-only cells (not present in remote) are merged in and uploaded.
+ * Local-only cells (not present in remote) are merged in and uploaded (awaited so writes finish).
  */
-function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) {
+async function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) {
   const merged = deepCloneData(remoteResults);
   for (const sid of Object.keys(localResults || {})) {
     const bucket = localResults[sid];
@@ -306,7 +306,10 @@ function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) {
         if (!entry || typeof entry !== 'object') continue;
         if (!merged[sid][dateKey][inst]) {
           merged[sid][dateKey][inst] = { ...entry };
-          if (userId) persistDayResultToSupabase(userId, sid, dateKey, inst, merged[sid][dateKey][inst]);
+          if (userId) {
+            const { error } = await persistDayResultToSupabase(userId, sid, dateKey, inst, merged[sid][dateKey][inst]);
+            if (error) console.error('[Tagverse] merge upload daily_results failed for', dateKey, inst);
+          }
         }
       }
     }
@@ -317,7 +320,7 @@ function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) {
 /**
  * Same as mergeDailyResultsCloudFirst for declarations.
  */
-function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, userId) {
+async function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, userId) {
   const merged = deepCloneData(remoteDeclarations);
   for (const sid of Object.keys(localDeclarations || {})) {
     const bucket = localDeclarations[sid];
@@ -336,7 +339,8 @@ function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, user
         if (!merged[sid][dateKey][inst]) {
           merged[sid][dateKey][inst] = { ...entry };
           if (userId) {
-            persistDeclarationToSupabase(userId, sid, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
+            const { error } = await persistDeclarationToSupabase(userId, sid, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
+            if (error) console.error('[Tagverse] merge upload declarations failed for', dateKey, inst);
           }
         }
       }
@@ -355,7 +359,10 @@ async function fetchDailyResultsFromSupabase(userId) {
   const supa = initSupabase();
   if (!supa) return {};
   const { data: rows, error } = await supa.from('daily_results').select('strategy_id, date_key, instrument, total_r, trade_count, trade_1_r').eq('user_id', userId);
-  if (error) return {};
+  if (error) {
+    console.error('[Tagverse] fetch daily_results failed:', error.message, error);
+    return {};
+  }
   const out = {};
   (rows || []).forEach((r) => {
     const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
@@ -371,7 +378,10 @@ async function fetchDeclarationsFromSupabase(userId) {
   const supa = initSupabase();
   if (!supa) return {};
   const { data: rows, error } = await supa.from('declarations').select('strategy_id, date_key, instrument, trade_count_planned, created_at').eq('user_id', userId);
-  if (error) return {};
+  if (error) {
+    console.error('[Tagverse] fetch declarations failed:', error.message, error);
+    return {};
+  }
   const out = {};
   (rows || []).forEach((r) => {
     const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
@@ -406,31 +416,35 @@ async function updateStrategyNameInSupabase(userId, id, name) {
 
 async function persistDayResultToSupabase(userId, strategyId, dateKey, instrument, entry) {
   const supa = initSupabase();
-  if (!supa) return;
+  if (!supa) return { error: new Error('Supabase not configured') };
   const row = {
     user_id: userId,
     date_key: dateKey,
     instrument,
     total_r: entry.totalR,
     trade_count: entry.tradeCount,
-    trade_1_r: entry.trade_1_r ?? null
+    trade_1_r: entry.trade_1_r ?? null,
+    strategy_id: strategyId === STRATEGY_DEFAULT_ID ? null : strategyId
   };
-  if (strategyId !== STRATEGY_DEFAULT_ID) row.strategy_id = strategyId;
-  await supa.from('daily_results').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+  const { error } = await supa.from('daily_results').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+  if (error) console.error('[Tagverse] persist daily_results failed:', error.message, { dateKey, instrument, strategyId });
+  return { error };
 }
 
 async function persistDeclarationToSupabase(userId, strategyId, dateKey, instrument, tradeCountPlanned, createdAt) {
   const supa = initSupabase();
-  if (!supa) return;
+  if (!supa) return { error: new Error('Supabase not configured') };
   const row = {
     user_id: userId,
     date_key: dateKey,
     instrument,
     trade_count_planned: tradeCountPlanned,
-    created_at: createdAt
+    created_at: createdAt,
+    strategy_id: strategyId === STRATEGY_DEFAULT_ID ? null : strategyId
   };
-  if (strategyId !== STRATEGY_DEFAULT_ID) row.strategy_id = strategyId;
-  await supa.from('declarations').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+  const { error } = await supa.from('declarations').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+  if (error) console.error('[Tagverse] persist declarations failed:', error.message, { dateKey, instrument, strategyId });
+  return { error };
 }
 
 async function deleteDayResultFromSupabase(userId, strategyId, dateKey, instrument) {
@@ -480,6 +494,20 @@ function saveSelectedInstrument(instrument) {
 }
 
 let selectedInstrument = loadSelectedInstrument();
+
+/** Persist all in-memory calendar/auth prefs to localStorage (e.g. when offline user taps Save locally). */
+function flushAllLocalDataToStorage() {
+  try {
+    saveDailyResults(dailyResults);
+    saveDeclarations(declarations);
+    saveStrategies(strategies);
+    saveSelectedStrategyId(selectedStrategyId);
+    saveSelectedInstrument(selectedInstrument);
+    saveCurrentMode(currentMode);
+  } catch (e) {
+    console.error('[Tagverse] flush local storage failed', e);
+  }
+}
 
 function formatDateKey(date) {
   const y = date.getFullYear();
@@ -589,7 +617,11 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   byInstrument[inst] = { tradeCountPlanned, createdAt };
   bucket[dateKey] = byInstrument;
   saveDeclarations(declarations);
-  if (currentUser) persistDeclarationToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, tradeCountPlanned, createdAt);
+  if (currentUser) {
+    void persistDeclarationToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, tradeCountPlanned, createdAt).then(({ error }) => {
+      if (error) console.error('[Tagverse] Declaration not synced to cloud (saved locally).', error.message);
+    });
+  }
 }
 
 function setDayResult(dateKey, instrument, totalR, tradeCount) {
@@ -603,7 +635,11 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
   byInstrument[inst] = entry;
   bucket[dateKey] = byInstrument;
   saveDailyResults(dailyResults);
-  if (currentUser) persistDayResultToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, entry);
+  if (currentUser) {
+    void persistDayResultToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, entry).then(({ error }) => {
+      if (error) console.error('[Tagverse] Trade not synced to cloud (saved locally).', error.message);
+    });
+  }
 }
 
 function clearDayLog(dateKey, instrument) {
@@ -931,8 +967,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const localDeclarations = loadDeclarations();
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
       const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
-      dailyResults = mergeDailyResultsCloudFirst(remoteResults, localResults, currentUser.id);
-      declarations = mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, currentUser.id);
+      dailyResults = await mergeDailyResultsCloudFirst(remoteResults, localResults, currentUser.id);
+      declarations = await mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, currentUser.id);
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
 
@@ -972,6 +1008,82 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
   }
 
+  window.__tagverseRefreshFromCloud = () => applyAuthState();
+
+  let offlineBannerCheckInFlight = false;
+  /**
+   * Show banner when browser reports offline OR when the network is unreachable (common on mobile:
+   * navigator.onLine stays true while the app still loads from cache).
+   */
+  async function refreshOfflineBanner() {
+    const banner = document.getElementById('offlineBanner');
+    if (!banner) return;
+    if (offlineBannerCheckInFlight) return;
+    offlineBannerCheckInFlight = true;
+    try {
+      const navOnline = typeof navigator === 'undefined' || navigator.onLine;
+      if (!navOnline) {
+        banner.hidden = false;
+        document.body.classList.add('has-offline-banner');
+        return;
+      }
+      if (!SUPABASE_URL) {
+        banner.hidden = true;
+        document.body.classList.remove('has-offline-banner');
+        return;
+      }
+      const ac = new AbortController();
+      const tid = window.setTimeout(() => ac.abort(), 6000);
+      try {
+        const res = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/auth/v1/health`, {
+          method: 'GET',
+          cache: 'no-store',
+          signal: ac.signal
+        });
+        window.clearTimeout(tid);
+        if (res.ok) {
+          banner.hidden = true;
+          document.body.classList.remove('has-offline-banner');
+        } else {
+          banner.hidden = false;
+          document.body.classList.add('has-offline-banner');
+        }
+      } catch (_) {
+        window.clearTimeout(tid);
+        banner.hidden = false;
+        document.body.classList.add('has-offline-banner');
+      }
+    } finally {
+      offlineBannerCheckInFlight = false;
+    }
+  }
+
+  window.addEventListener('online', () => {
+    void refreshOfflineBanner();
+    if (currentUser) applyAuthState();
+  });
+  window.addEventListener('offline', () => void refreshOfflineBanner());
+
+  window.setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshOfflineBanner();
+  }, 8000);
+
+  const offlineSaveBtn = document.getElementById('offlineSaveBtn');
+  if (offlineSaveBtn) {
+    offlineSaveBtn.addEventListener('click', () => {
+      flushAllLocalDataToStorage();
+      const old = offlineSaveBtn.textContent;
+      offlineSaveBtn.textContent = 'Saved on this device';
+      offlineSaveBtn.disabled = true;
+      window.setTimeout(() => {
+        offlineSaveBtn.textContent = old;
+        offlineSaveBtn.disabled = false;
+      }, 2800);
+    });
+  }
+
+  void refreshOfflineBanner();
+
   const supa = initSupabase();
   if (supa) {
     supa.auth.getSession().then(({ data }) => {
@@ -983,6 +1095,19 @@ document.addEventListener('DOMContentLoaded', () => {
       applyAuthState();
     });
   }
+
+  let lastCloudRefreshAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void refreshOfflineBanner();
+    if (document.visibilityState !== 'visible' || !currentUser) return;
+    const now = Date.now();
+    if (now - lastCloudRefreshAt < 4000) return;
+    lastCloudRefreshAt = now;
+    applyAuthState();
+  });
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted && currentUser) applyAuthState();
+  });
 
   document.querySelectorAll('.nav-tab').forEach((tab) => {
     tab.addEventListener('click', () => showScreen(tab.dataset.screen));
@@ -1124,7 +1249,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const authModalBackdrop = document.getElementById('authModalBackdrop');
   const authEmail = document.getElementById('authEmail');
   const authPassword = document.getElementById('authPassword');
+  const authPasswordToggle = document.getElementById('authPasswordToggle');
   const authPasswordConfirm = document.getElementById('authPasswordConfirm');
+  const authPasswordConfirmToggle = document.getElementById('authPasswordConfirmToggle');
   const authPasswordConfirmWrap = document.getElementById('authPasswordConfirmWrap');
   const authModalMessage = document.getElementById('authModalMessage');
   const authModalTitle = document.getElementById('authModalTitle');
@@ -1145,6 +1272,36 @@ document.addEventListener('DOMContentLoaded', () => {
   if (loginButton) loginButton.textContent = 'Sign in with email';
 
   let authModalMode = 'signin';
+
+  function syncPasswordToggleUi(input, button) {
+    if (!input || !button) return;
+    const eye = button.querySelector('.auth-password-icon-eye');
+    const eyeOff = button.querySelector('.auth-password-icon-eye-off');
+    const visible = input.type === 'text';
+    button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    button.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+    if (eye) eye.hidden = visible;
+    if (eyeOff) eyeOff.hidden = !visible;
+  }
+
+  function wireAuthPasswordToggle(input, button) {
+    if (!input || !button) return;
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      input.type = input.type === 'password' ? 'text' : 'password';
+      syncPasswordToggleUi(input, button);
+    });
+  }
+
+  function resetAuthPasswordToggles() {
+    if (authPassword) authPassword.type = 'password';
+    if (authPasswordConfirm) authPasswordConfirm.type = 'password';
+    syncPasswordToggleUi(authPassword, authPasswordToggle);
+    syncPasswordToggleUi(authPasswordConfirm, authPasswordConfirmToggle);
+  }
+
+  wireAuthPasswordToggle(authPassword, authPasswordToggle);
+  wireAuthPasswordToggle(authPasswordConfirm, authPasswordConfirmToggle);
 
   function setAuthModalMode(mode) {
     authModalMode = mode;
@@ -1170,6 +1327,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (authEmail) authEmail.value = '';
       if (authPassword) authPassword.value = '';
       if (authPasswordConfirm) authPasswordConfirm.value = '';
+      resetAuthPasswordToggles();
       if (authModalMessage) { authModalMessage.hidden = true; authModalMessage.textContent = ''; }
       authEmail?.focus();
     }
@@ -1179,6 +1337,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (authModal) authModal.hidden = true;
     if (authPassword) authPassword.value = '';
     if (authPasswordConfirm) authPasswordConfirm.value = '';
+    resetAuthPasswordToggles();
   }
 
   if (loginButton) loginButton.addEventListener('click', openAuthModal);

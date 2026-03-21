@@ -108,6 +108,83 @@ body {
   transition: color var(--transition-ease), background-color var(--transition-ease);
 }
 
+body.has-offline-banner {
+  padding-top: 3rem;
+}
+
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2147483646;
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(135deg, #3d2e1a 0%, #2a2218 100%);
+  border-bottom: 1px solid rgba(255, 180, 80, 0.35);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+html.theme-light .offline-banner {
+  background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+  border-bottom-color: rgba(200, 120, 0, 0.35);
+}
+
+.offline-banner-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.offline-banner-icon {
+  flex-shrink: 0;
+  color: #ffb74d;
+  display: flex;
+}
+
+html.theme-light .offline-banner-icon {
+  color: #e65100;
+}
+
+.offline-banner-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  flex: 1 1 12rem;
+  text-align: center;
+}
+
+.offline-banner-btn {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 180, 80, 0.45);
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.offline-banner-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.offline-banner-btn:disabled {
+  opacity: 0.85;
+  cursor: default;
+}
+
+html.theme-light .offline-banner-btn {
+  background: rgba(230, 81, 0, 0.12);
+  border-color: rgba(200, 100, 0, 0.45);
+  color: var(--text-primary);
+}
+
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -623,6 +700,54 @@ html.theme-light .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-re
   padding: 0.5rem;
   border-radius: 4px;
   font-size: 0.9rem;
+}
+
+.auth-password-wrap {
+  position: relative;
+  max-width: 280px;
+  width: 100%;
+}
+
+.auth-password-wrap .auth-password-input {
+  padding-right: 2.75rem;
+  box-sizing: border-box;
+}
+
+.auth-password-toggle {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.auth-password-toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.theme-light .auth-password-toggle:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.auth-password-toggle:focus-visible {
+  outline: 2px solid var(--selected-border);
+  outline-offset: 2px;
+}
+
+.auth-password-toggle svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .auth-modal-switch {
