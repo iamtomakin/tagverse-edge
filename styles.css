@@ -2126,39 +2126,27 @@ html.theme-light .settings-primary-btn {
   background: var(--cell-default);
 }
 
-/* Bio below calendar (Settings → Profile; shown only when bio exists) */
+/* Bio below calendar — plain centered line (no card); same UI font as body / calendar cells */
 .calendar-user-bio {
-  margin-top: 1.25rem;
-  padding: 1rem 1.15rem 1.15rem;
-  background: var(--cell-default);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  margin-top: 1.35rem;
+  padding: 0 0.5rem;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-}
-
-html.theme-light .calendar-user-bio {
-  background: #fff;
-  border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
-.calendar-user-bio-label {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-secondary);
-  margin: 0 0 0.5rem;
+  text-align: center;
 }
 
 .calendar-user-bio-text {
-  font-size: 0.95rem;
+  font-family: "Roboto Condensed", sans-serif; /* matches app logo / headings */
+  font-size: 1rem;
+  font-style: italic;
+  font-weight: 500;
   line-height: 1.5;
   color: var(--text-primary);
-  margin: 0;
+  margin: 0 auto;
+  max-width: 36rem;
+  text-align: center;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
