@@ -317,47 +317,86 @@
     </main>
 
     <!-- Screen 5: Settings -->
-    <main id="screen-settings" class="screen" role="main" hidden>
-      <div class="settings-container">
-        <h2 class="settings-title">Settings</h2>
-        <div class="settings-section">
-          <label class="settings-label">Theme</label>
-          <select id="settingsTheme">
-            <option value="dark" selected>Dark</option>
-            <option value="light">Light</option>
-          </select>
-        </div>
-        <div class="settings-section">
-          <p class="settings-meta">Tagverse Edge — behavioural trading dashboard</p>
-        </div>
-        <div class="settings-section">
-          <h3 class="settings-subtitle">Account</h3>
-          <p class="settings-meta" id="settingsAccountMeta">Sign in with email to sync your data.</p>
-        </div>
-        <div class="settings-section">
-          <h3 class="settings-subtitle">Profile</h3>
-          <label class="settings-label" for="settingsUsername">Username</label>
-          <input type="text" id="settingsUsername" class="settings-input" placeholder="@your_handle" autocomplete="username" />
-          <p class="settings-meta settings-hint">One per account — once taken, nobody else can use it. Saved in lowercase.</p>
-          <label class="settings-label" for="settingsBio">Bio (optional)</label>
-          <textarea id="settingsBio" class="settings-textarea" rows="3" placeholder="Short line about your trading focus."></textarea>
-          <div class="settings-actions">
-            <button type="button" id="settingsSaveProfile" class="settings-primary-btn">Save profile</button>
-            <p class="settings-meta" id="settingsProfileMessage"></p>
-          </div>
-        </div>
-        <div class="settings-section">
-          <h3 class="settings-subtitle">Password</h3>
-          <label class="settings-label" for="settingsCurrentPassword">Current password</label>
-          <input type="password" id="settingsCurrentPassword" class="settings-input" autocomplete="current-password" />
-          <label class="settings-label" for="settingsNewPassword">New password</label>
-          <input type="password" id="settingsNewPassword" class="settings-input" autocomplete="new-password" />
-          <label class="settings-label" for="settingsConfirmPassword">Confirm new password</label>
-          <input type="password" id="settingsConfirmPassword" class="settings-input" autocomplete="new-password" />
-          <div class="settings-actions">
-            <button type="button" id="settingsChangePassword" class="settings-primary-btn">Change password</button>
-            <p class="settings-meta" id="settingsPasswordMessage"></p>
-          </div>
+    <main id="screen-settings" class="screen screen-settings" role="main" hidden>
+      <div class="settings-layout">
+        <header class="settings-page-head">
+          <h1 class="settings-page-title">Settings</h1>
+          <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+            <button type="button" class="settings-tab active" role="tab" aria-selected="true" aria-controls="settingsPanelBasics" id="settingsTabBasics" data-settings-tab="basics">Basics</button>
+            <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settingsPanelProfile" id="settingsTabProfile" data-settings-tab="profile">Profile</button>
+            <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settingsPanelSecurity" id="settingsTabSecurity" data-settings-tab="security">Security</button>
+          </nav>
+        </header>
+
+        <div class="settings-panels">
+          <section id="settingsPanelBasics" class="settings-panel is-active" role="tabpanel" aria-labelledby="settingsTabBasics" data-settings-panel="basics">
+            <article class="settings-card">
+              <h2 class="settings-card-title">Appearance</h2>
+              <p class="settings-card-lead">Choose how Tagverse Edge looks on this device.</p>
+              <div class="settings-field">
+                <label class="settings-label" for="settingsTheme">Theme</label>
+                <select id="settingsTheme" class="settings-select">
+                  <option value="dark" selected>Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </div>
+            </article>
+            <article class="settings-card">
+              <h2 class="settings-card-title">Account</h2>
+              <p class="settings-card-lead" id="settingsAccountMeta">Sign in with email to sync your data.</p>
+            </article>
+            <p class="settings-tagline">Tagverse Edge — behavioural trading dashboard</p>
+          </section>
+
+          <section id="settingsPanelProfile" class="settings-panel" role="tabpanel" aria-labelledby="settingsTabProfile" data-settings-panel="profile" hidden>
+            <article class="settings-card">
+              <h2 class="settings-card-title">Profile information</h2>
+              <p class="settings-card-lead">Your handle is shown in the header and on community posts.</p>
+              <div class="settings-profile-row">
+                <div class="settings-avatar" id="settingsProfileAvatar" aria-hidden="true">
+                  <span class="settings-avatar-initials" id="settingsAvatarInitials">?</span>
+                </div>
+                <div class="settings-profile-fields">
+                  <div class="settings-field">
+                    <label class="settings-label" for="settingsUsername">Username</label>
+                    <input type="text" id="settingsUsername" class="settings-input" placeholder="@your_handle" autocomplete="username" />
+                    <p class="settings-field-hint">One per account — once taken, nobody else can use it. Saved in lowercase.</p>
+                  </div>
+                  <div class="settings-field">
+                    <label class="settings-label" for="settingsBio">Bio <span class="settings-optional">(optional)</span></label>
+                    <textarea id="settingsBio" class="settings-textarea" rows="3" placeholder="Short line about your trading focus."></textarea>
+                  </div>
+                  <div class="settings-actions">
+                    <button type="button" id="settingsSaveProfile" class="settings-btn-primary">Save</button>
+                    <p class="settings-inline-msg" id="settingsProfileMessage" role="status"></p>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <section id="settingsPanelSecurity" class="settings-panel" role="tabpanel" aria-labelledby="settingsTabSecurity" data-settings-panel="security" hidden>
+            <article class="settings-card">
+              <h2 class="settings-card-title">Password</h2>
+              <p class="settings-card-lead">Update your password. Use a strong password you don’t reuse elsewhere.</p>
+              <div class="settings-field">
+                <label class="settings-label" for="settingsCurrentPassword">Current password</label>
+                <input type="password" id="settingsCurrentPassword" class="settings-input" autocomplete="current-password" />
+              </div>
+              <div class="settings-field">
+                <label class="settings-label" for="settingsNewPassword">New password</label>
+                <input type="password" id="settingsNewPassword" class="settings-input" autocomplete="new-password" />
+              </div>
+              <div class="settings-field">
+                <label class="settings-label" for="settingsConfirmPassword">Confirm new password</label>
+                <input type="password" id="settingsConfirmPassword" class="settings-input" autocomplete="new-password" />
+              </div>
+              <div class="settings-actions">
+                <button type="button" id="settingsChangePassword" class="settings-btn-primary">Save</button>
+                <p class="settings-inline-msg" id="settingsPasswordMessage" role="status"></p>
+              </div>
+            </article>
+          </section>
         </div>
       </div>
     </main>

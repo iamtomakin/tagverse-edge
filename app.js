@@ -76,6 +76,26 @@ async function isUsernameTakenByOther(userId, normalized) {
   return !!data;
 }
 
+/** Updates the circular initials avatar on Settings → Profile (preview while typing). */
+function updateSettingsAvatarPreview() {
+  const el = document.getElementById('settingsAvatarInitials');
+  if (!el) return;
+  const input = document.getElementById('settingsUsername');
+  const raw =
+    input && typeof input.value === 'string' ? input.value : (currentProfile && currentProfile.username) || '';
+  const u = normalizeUsername(raw);
+  if (!u) {
+    el.textContent = '?';
+    return;
+  }
+  const parts = u.split(/[\s_-]+/).filter(Boolean);
+  let initials = '';
+  if (parts.length >= 2) initials = (parts[0][0] + parts[1][0]).toUpperCase();
+  else if (u.length >= 2) initials = u.slice(0, 2).toUpperCase();
+  else initials = u[0].toUpperCase();
+  el.textContent = initials;
+}
+
 /**
  * Create/update profile row. Uses upsert(onConflict: id), then update/insert fallbacks for stubborn API issues.
  */
@@ -1548,6 +1568,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Profile updated.';
       updateAuthUI();
+      updateSettingsAvatarPreview();
     });
   }
 
@@ -1604,12 +1625,33 @@ document.addEventListener('DOMContentLoaded', () => {
       settingsUsernameInput.value = '';
       settingsBioInput.value = '';
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to edit your profile.';
+      updateSettingsAvatarPreview();
       return;
     }
     settingsUsernameInput.value = currentProfile?.username || '';
     settingsBioInput.value = currentProfile?.bio || '';
     if (settingsProfileMessage) settingsProfileMessage.textContent = '';
+    updateSettingsAvatarPreview();
   }
+
+  settingsUsernameInput?.addEventListener('input', () => updateSettingsAvatarPreview());
+
+  document.querySelectorAll('.settings-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.settingsTab;
+      if (!target) return;
+      document.querySelectorAll('.settings-tab').forEach((t) => {
+        const on = t.dataset.settingsTab === target;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('.settings-panel').forEach((panel) => {
+        const show = panel.dataset.settingsPanel === target;
+        panel.hidden = !show;
+        panel.classList.toggle('is-active', show);
+      });
+    });
+  });
 
   document.querySelectorAll('.instrument-pill').forEach((pill) => {
     pill.addEventListener('click', () => {
