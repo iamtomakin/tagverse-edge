@@ -656,7 +656,7 @@ html.theme-light .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-re
 }
 
 .log-options-r .log-option {
-  min-width: 3.5rem;
+  min-width: 3rem;
 }
 
 .log-modal-actions {
@@ -2051,6 +2051,15 @@ html.theme-light .settings-primary-btn {
 
 .calendar-cell.profit:hover {
   background: var(--profit-bg-hover);
+}
+
+/* Breakeven (0R) day */
+.calendar-cell.breakeven {
+  background: var(--cell-default);
+}
+
+.calendar-cell.breakeven:hover {
+  background: var(--cell-default-hover);
 }
 
 /* Selected day */

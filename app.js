@@ -985,7 +985,9 @@ function renderCalendar() {
         if (selected) cell.classList.add('selected');
         if (!weekday) cell.classList.add('weekend');
         if (data) {
-          cell.classList.add(data.totalR >= 0 ? 'profit' : 'loss');
+          if (data.totalR > 0) cell.classList.add('profit');
+          else if (data.totalR < 0) cell.classList.add('loss');
+          else cell.classList.add('breakeven');
           cell.innerHTML = `
             <span class="date-num">${dayNum}</span>
             <span class="pl-amount">${formatR(data.totalR)}</span>
@@ -1095,11 +1097,18 @@ function saveDeclarationFromModal(tradeCountPlanned) {
   renderCalendar();
 }
 
+/** Trade count for logging: legacy rules for ±1R/±2R; flat day for 0 and +3R–+5R. */
+function tradeCountForOutcome(totalR) {
+  if (totalR === 2 || totalR === -2) return totalR === 2 ? 1 : 2;
+  if (totalR === 1 || totalR === -1) return totalR === 1 ? 2 : 1;
+  return 1;
+}
+
 function saveOutcomeFromModal(r) {
   if (!logModalTargetDate) return;
   const key = formatDateKey(logModalTargetDate);
   const totalR = Number(r);
-  const tradeCount = totalR === 2 || totalR === -2 ? (totalR === 2 ? 1 : 2) : (totalR === 1 ? 2 : 1);
+  const tradeCount = tradeCountForOutcome(totalR);
   setDayResult(key, selectedInstrument, totalR, tradeCount);
   const comparisonEl = document.getElementById('logModalComparison');
   if (comparisonEl) {
