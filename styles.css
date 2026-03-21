@@ -2126,7 +2126,7 @@ html.theme-light .settings-primary-btn {
   background: var(--cell-default);
 }
 
-/* Bio below calendar — plain centered line (no card); same UI font as body / calendar cells */
+/* Bio below calendar — Inter SemiBold, softened opacity; centered */
 .calendar-user-bio {
   margin-top: 1.35rem;
   padding: 0 0.5rem;
@@ -2138,12 +2138,15 @@ html.theme-light .settings-primary-btn {
 }
 
 .calendar-user-bio-text {
-  font-family: "Roboto Condensed", sans-serif; /* matches app logo / headings */
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 1rem;
-  font-style: italic;
-  font-weight: 500;
+  font-style: normal;
+  font-weight: 600; /* SemiBold */
   line-height: 1.5;
+  letter-spacing: normal;
+  font-stretch: normal;
   color: var(--text-primary);
+  opacity: 0.88;
   margin: 0 auto;
   max-width: 36rem;
   text-align: center;
