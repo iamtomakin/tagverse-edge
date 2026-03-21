@@ -1010,63 +1010,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.__tagverseRefreshFromCloud = () => applyAuthState();
 
-  let offlineBannerCheckInFlight = false;
   /**
-   * Show banner when browser reports offline OR when the network is unreachable (common on mobile:
-   * navigator.onLine stays true while the app still loads from cache).
+   * Offline UI uses navigator.onLine only. (A previous Supabase /auth/v1/health probe caused
+   * false positives — banner stuck on — when fetch failed for CORS/adblock/timing reasons.)
    */
-  async function refreshOfflineBanner() {
+  function refreshOfflineBanner() {
     const banner = document.getElementById('offlineBanner');
     if (!banner) return;
-    if (offlineBannerCheckInFlight) return;
-    offlineBannerCheckInFlight = true;
-    try {
-      const navOnline = typeof navigator === 'undefined' || navigator.onLine;
-      if (!navOnline) {
-        banner.hidden = false;
-        document.body.classList.add('has-offline-banner');
-        return;
-      }
-      if (!SUPABASE_URL) {
-        banner.hidden = true;
-        document.body.classList.remove('has-offline-banner');
-        return;
-      }
-      const ac = new AbortController();
-      const tid = window.setTimeout(() => ac.abort(), 6000);
-      try {
-        const res = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/auth/v1/health`, {
-          method: 'GET',
-          cache: 'no-store',
-          signal: ac.signal
-        });
-        window.clearTimeout(tid);
-        if (res.ok) {
-          banner.hidden = true;
-          document.body.classList.remove('has-offline-banner');
-        } else {
-          banner.hidden = false;
-          document.body.classList.add('has-offline-banner');
-        }
-      } catch (_) {
-        window.clearTimeout(tid);
-        banner.hidden = false;
-        document.body.classList.add('has-offline-banner');
-      }
-    } finally {
-      offlineBannerCheckInFlight = false;
+    const navOnline = typeof navigator === 'undefined' || navigator.onLine;
+    if (!navOnline) {
+      banner.hidden = false;
+      document.body.classList.add('has-offline-banner');
+    } else {
+      banner.hidden = true;
+      document.body.classList.remove('has-offline-banner');
     }
   }
 
   window.addEventListener('online', () => {
-    void refreshOfflineBanner();
+    refreshOfflineBanner();
     if (currentUser) applyAuthState();
   });
-  window.addEventListener('offline', () => void refreshOfflineBanner());
+  window.addEventListener('offline', refreshOfflineBanner);
 
   window.setInterval(() => {
-    if (document.visibilityState === 'visible') void refreshOfflineBanner();
-  }, 8000);
+    if (document.visibilityState === 'visible') refreshOfflineBanner();
+  }, 3000);
 
   const offlineSaveBtn = document.getElementById('offlineSaveBtn');
   if (offlineSaveBtn) {
@@ -1082,7 +1051,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  void refreshOfflineBanner();
+  refreshOfflineBanner();
 
   const supa = initSupabase();
   if (supa) {
@@ -1098,7 +1067,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let lastCloudRefreshAt = 0;
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void refreshOfflineBanner();
+    if (document.visibilityState === 'visible') refreshOfflineBanner();
     if (document.visibilityState !== 'visible' || !currentUser) return;
     const now = Date.now();
     if (now - lastCloudRefreshAt < 4000) return;
