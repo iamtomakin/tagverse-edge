@@ -30,10 +30,7 @@
         <button type="button" class="nav-tab" data-screen="settings">Settings</button>
       </nav>
       <div class="auth-bar" aria-live="polite">
-        <div class="auth-welcome-group">
-          <span id="authStatus" class="auth-status">Not signed in</span>
-          <span id="authHeaderBio" class="auth-header-bio" hidden></span>
-        </div>
+        <span id="authStatus" class="auth-status">Not signed in</span>
         <button type="button" id="loginButton" class="auth-btn">Sign in with email</button>
         <button type="button" id="logoutButton" class="auth-btn" hidden>Sign out</button>
       </div>
@@ -142,6 +139,10 @@
         <div class="calendar-grid-wrapper">
           <div class="calendar-grid" id="calendarGrid"></div>
         </div>
+        <section class="calendar-user-bio" id="calendarUserBioSection" hidden aria-label="Your bio">
+          <p class="calendar-user-bio-label">Bio</p>
+          <p class="calendar-user-bio-text" id="calendarUserBioText"></p>
+        </section>
       </div>
     </main>
 
@@ -366,9 +367,8 @@
                     <p class="settings-field-hint">one @ per human. no twinsies. we lowercase everything bc caps lock is cringe.</p>
                   </div>
                   <div class="settings-field">
-                    <label class="settings-label" for="settingsBio">Bio <span class="settings-optional">(optional)</span></label>
-                    <textarea id="settingsBio" class="settings-textarea" rows="2" maxlength="60" placeholder="Max 5 words — shows under Welcome in the header."></textarea>
-                    <p class="settings-field-hint settings-bio-count" id="settingsBioCharHint"><span id="settingsBioCount">0</span> / 5 words</p>
+                    <label class="settings-label settings-label-sentence" for="settingsBio">Add a short bio (optional)</label>
+                    <textarea id="settingsBio" class="settings-textarea" rows="3" maxlength="65" placeholder="Up to 65 characters — shows below your calendar when saved."></textarea>
                   </div>
                   <div class="settings-actions">
                     <button type="button" id="settingsSaveProfile" class="settings-btn-primary">Save</button>

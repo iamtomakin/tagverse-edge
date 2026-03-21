@@ -852,7 +852,7 @@ function updateAuthUI() {
   const logoutButton = document.getElementById('logoutButton');
   const accountMeta = document.getElementById('settingsAccountMeta');
   if (!statusEl || !loginButton || !logoutButton) {
-    syncHeaderBio();
+    syncCalendarUserBio();
     return;
   }
   if (currentUser) {
@@ -879,56 +879,45 @@ function updateAuthUI() {
     logoutButton.hidden = true;
     if (accountMeta) accountMeta.textContent = 'Sign in with email to sync your data.';
   }
-  syncHeaderBio();
+  syncCalendarUserBio();
 }
 
-/** Profile bio: max words (primary rule) and hard char cap (keeps header one line). */
-const MAX_BIO_WORDS = 5;
-const MAX_BIO_CHARS = 55;
+/** Profile bio max length (Settings + calendar footer). */
+const MAX_BIO_CHARS = 65;
 
-function countBioWords(str) {
-  return String(str || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean).length;
-}
-
-/** Clamp to at most MAX_BIO_WORDS words and MAX_BIO_CHARS (drops words from the end if too long). */
-function clampBio(raw) {
-  let words = String(raw || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, MAX_BIO_WORDS);
-  let s = words.join(' ');
-  while (s.length > MAX_BIO_CHARS && words.length > 0) {
-    words = words.slice(0, -1);
-    s = words.join(' ');
-  }
+/** While typing: only cap length — do not trim (so spaces between words work). */
+function clampBioInputLength(raw) {
+  let s = String(raw || '');
+  if (s.length > MAX_BIO_CHARS) s = s.slice(0, MAX_BIO_CHARS);
   return s;
 }
 
-/** Header: show profile bio under “Welcome …” when signed in and bio is non-empty. */
-function syncHeaderBio() {
-  const el = document.getElementById('authHeaderBio');
-  if (!el) return;
+/** On save / display from DB: trim ends and cap length. */
+function clampBio(raw) {
+  let s = String(raw || '').trim();
+  if (s.length > MAX_BIO_CHARS) s = s.slice(0, MAX_BIO_CHARS);
+  return s;
+}
+
+/** Calendar: show bio below the grid when signed in and bio is non-empty. */
+function syncCalendarUserBio() {
+  const section = document.getElementById('calendarUserBioSection');
+  const textEl = document.getElementById('calendarUserBioText');
+  if (!section || !textEl) return;
   if (!currentUser) {
-    el.hidden = true;
-    el.textContent = '';
-    el.removeAttribute('title');
+    section.hidden = true;
+    textEl.textContent = '';
     return;
   }
   const raw = currentProfile && currentProfile.bio != null ? String(currentProfile.bio) : '';
   const bio = clampBio(raw);
   if (!bio) {
-    el.hidden = true;
-    el.textContent = '';
-    el.removeAttribute('title');
+    section.hidden = true;
+    textEl.textContent = '';
     return;
   }
-  el.hidden = false;
-  el.textContent = bio;
-  el.title = bio;
+  section.hidden = false;
+  textEl.textContent = bio;
 }
 
 function showScreen(screenId) {
@@ -1039,6 +1028,7 @@ function renderCalendar() {
     monthlyEl.textContent = formatR(monthlyTotalR);
     monthlyEl.className = 'pl-value ' + (monthlyTotalR === 0 ? 'neutral' : monthlyTotalR > 0 ? 'profit' : 'loss');
   }
+  syncCalendarUserBio();
 }
 
 function selectDate(date) {
@@ -1623,7 +1613,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Profile updated.';
       updateAuthUI();
       updateSettingsAvatarPreview();
-      syncSettingsBioWordCount();
+      syncCalendarUserBio();
     });
   }
 
@@ -1674,17 +1664,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function syncSettingsBioWordCount() {
-    const countEl = document.getElementById('settingsBioCount');
-    if (!countEl || !settingsBioInput) return;
-    countEl.textContent = String(countBioWords(settingsBioInput.value));
-  }
-
   function onSettingsBioInput() {
     if (!settingsBioInput) return;
-    const next = clampBio(settingsBioInput.value);
+    const next = clampBioInputLength(settingsBioInput.value);
     if (next !== settingsBioInput.value) settingsBioInput.value = next;
-    syncSettingsBioWordCount();
   }
 
   function hydrateProfileSettings() {
@@ -1694,14 +1677,14 @@ document.addEventListener('DOMContentLoaded', () => {
       settingsBioInput.value = '';
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to edit your profile.';
       updateSettingsAvatarPreview();
-      syncSettingsBioWordCount();
       return;
     }
     settingsUsernameInput.value = currentProfile?.username || '';
-    settingsBioInput.value = clampBio(currentProfile?.bio != null ? String(currentProfile.bio) : '');
+    settingsBioInput.value = clampBioInputLength(
+      String(currentProfile?.bio != null ? currentProfile.bio : '').trim()
+    );
     if (settingsProfileMessage) settingsProfileMessage.textContent = '';
     updateSettingsAvatarPreview();
-    syncSettingsBioWordCount();
   }
 
   settingsUsernameInput?.addEventListener('input', () => updateSettingsAvatarPreview());
