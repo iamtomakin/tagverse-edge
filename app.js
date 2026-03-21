@@ -41,12 +41,39 @@ async function fetchCurrentProfile(userId) {
   return data;
 }
 
+/** Trim, strip leading @, lowercase so "Trader" and "trader" cannot both exist (matches DB uniqueness). */
+function normalizeUsername(raw) {
+  if (raw == null || typeof raw !== 'string') return '';
+  let s = raw.trim();
+  if (s.startsWith('@')) s = s.slice(1).trim();
+  return s.toLowerCase();
+}
+
+function isUniqueViolationError(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  if (code === '23505') return true;
+  const msg = String(err.message || '');
+  return /duplicate key|unique constraint/i.test(msg);
+}
+
 function formatPostgrestError(err) {
   if (!err) return '';
-  if (!('details' in err) && !('hint' in err) && typeof err.message === 'string') return err.message;
-  const parts = [err.message, err.details, err.hint].filter(Boolean);
-  if (err.code) parts.unshift(`[${err.code}]`);
+  const root = err.cause && typeof err.cause === 'object' ? err.cause : err;
+  if (isUniqueViolationError(root)) return 'This username is already taken.';
+  if (!('details' in root) && !('hint' in root) && typeof root.message === 'string') return root.message;
+  const parts = [root.message, root.details, root.hint].filter(Boolean);
+  if (root.code) parts.unshift(`[${root.code}]`);
   return parts.join(' — ');
+}
+
+/** Returns true if another profile (not userId) already uses this exact normalized username. */
+async function isUsernameTakenByOther(userId, normalized) {
+  const supa = initSupabase();
+  if (!supa || !userId || !normalized) return false;
+  const { data, error } = await supa.from('profiles').select('id').eq('username', normalized).neq('id', userId).maybeSingle();
+  if (error) return false;
+  return !!data;
 }
 
 /**
@@ -77,9 +104,10 @@ async function upsertProfile(userId, fields) {
   }
 
   const primary = tryUpsert.error || tryUpdate.error || tryInsert.error;
+  const msg = formatPostgrestError(primary) || primary?.message || 'Could not save profile.';
   return {
     data: null,
-    error: new Error(formatPostgrestError(primary) || primary?.message || 'Could not save profile.')
+    error: new Error(msg, primary ? { cause: primary } : undefined)
   };
 }
 
@@ -806,11 +834,22 @@ function updateAuthUI() {
   if (!statusEl || !loginButton || !logoutButton) return;
   if (currentUser) {
     const email = currentUser.email || '';
-    const displayName = (currentProfile && currentProfile.username) || email || 'Signed in';
-    statusEl.textContent = displayName;
+    const uname = currentProfile && currentProfile.username ? String(currentProfile.username).trim() : '';
+    if (uname) {
+      statusEl.textContent = 'Welcome ' + uname;
+    } else {
+      statusEl.textContent = email ? 'Welcome — ' + email : 'Welcome';
+    }
     loginButton.hidden = true;
     logoutButton.hidden = false;
-    if (accountMeta) accountMeta.textContent = 'Signed in as ' + displayName + '. Your data is synced to the cloud.';
+    if (accountMeta) {
+      if (uname) {
+        accountMeta.textContent = 'Signed in as ' + email + '. Your handle is @' + uname + '. Your data is synced to the cloud.';
+      } else {
+        accountMeta.textContent =
+          'Signed in as ' + email + '. Choose a unique username below — it can’t be used by anyone else. Your data is synced to the cloud.';
+      }
+    }
   } else {
     statusEl.textContent = 'Not signed in';
     loginButton.hidden = false;
@@ -1483,14 +1522,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to save your profile.';
         return;
       }
-      const username = (settingsUsernameInput?.value || '').trim();
+      const usernameRaw = (settingsUsernameInput?.value || '').trim();
+      const username = normalizeUsername(usernameRaw);
       const bio = (settingsBioInput?.value || '').trim();
       if (!username) {
         if (settingsProfileMessage) settingsProfileMessage.textContent = 'Username cannot be empty.';
         return;
       }
+      if (await isUsernameTakenByOther(currentUser.id, username)) {
+        if (settingsProfileMessage) settingsProfileMessage.textContent = 'This username is already taken.';
+        return;
+      }
       settingsSaveProfileBtn.disabled = true;
       if (settingsProfileMessage) settingsProfileMessage.textContent = '';
+      if (settingsUsernameInput) settingsUsernameInput.value = username;
       const profilePayload = { username, bio: bio || null };
       if (currentProfile?.default_strategy_name != null && currentProfile.default_strategy_name !== '') {
         profilePayload.default_strategy_name = currentProfile.default_strategy_name;

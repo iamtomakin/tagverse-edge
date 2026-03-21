@@ -1458,6 +1458,12 @@ html.theme-light .auth-password-toggle:hover {
   margin: 1.5rem 0 0;
 }
 
+.settings-hint {
+  margin: 0.35rem 0 0;
+  max-width: 32rem;
+  line-height: 1.35;
+}
+
 /* Monthly P/L header */
 .monthly-summary {
   text-align: center;

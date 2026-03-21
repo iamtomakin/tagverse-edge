@@ -26,7 +26,7 @@ Or **Pause project** → **Resume** (forces services to restart).
 
 1. Deploy / open the live site with the **same** `SUPABASE_URL` + anon key as that project.
 2. **Sign in**.
-3. **Settings** → enter **Username** (required, unique) → **Save profile**.
+3. **Settings** → enter **Username** (required, **globally unique** — stored lowercase) → **Save profile**.
 
 You should see **Profile updated.** and a row in **Table Editor → `public.profiles`**.
 

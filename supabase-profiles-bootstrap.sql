@@ -1,5 +1,6 @@
 -- Same as supabase-profiles-setup.sql — kept for backwards compatibility.
 -- Prefer opening and running: supabase-profiles-setup.sql
+-- username is globally unique (app saves lowercase).
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,

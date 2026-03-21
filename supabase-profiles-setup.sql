@@ -10,6 +10,7 @@
 --   • Then run this script again, or: Project Settings → General → Pause → Resume
 -- =============================================================================
 
+-- username: globally unique (see unique constraint); app normalizes to lowercase before save.
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text not null unique,
