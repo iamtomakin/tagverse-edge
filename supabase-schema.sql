@@ -124,6 +124,9 @@ create policy "Users can upsert own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
+grant usage on schema public to anon, authenticated, service_role;
+grant all on table public.profiles to anon, authenticated, service_role;
+
 notify pgrst, 'reload schema';
 
 -- Shared calendars/posts shown on Community page

@@ -26,7 +26,9 @@ function isSupabaseEnabled() {
 function initSupabase() {
   if (!isSupabaseEnabled()) return null;
   if (!supabaseClient) {
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      db: { schema: 'public' }
+    });
   }
   return supabaseClient;
 }
