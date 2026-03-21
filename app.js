@@ -851,7 +851,10 @@ function updateAuthUI() {
   const loginButton = document.getElementById('loginButton');
   const logoutButton = document.getElementById('logoutButton');
   const accountMeta = document.getElementById('settingsAccountMeta');
-  if (!statusEl || !loginButton || !logoutButton) return;
+  if (!statusEl || !loginButton || !logoutButton) {
+    syncHeaderBio();
+    return;
+  }
   if (currentUser) {
     const email = currentUser.email || '';
     const uname = currentProfile && currentProfile.username ? String(currentProfile.username).trim() : '';
@@ -875,6 +878,46 @@ function updateAuthUI() {
     loginButton.hidden = false;
     logoutButton.hidden = true;
     if (accountMeta) accountMeta.textContent = 'Sign in with email to sync your data.';
+  }
+  syncHeaderBio();
+}
+
+/** Max length for bio in Settings (stored in Supabase). */
+const SETTINGS_BIO_MAX_LENGTH = 120;
+/** Max characters shown in the header before ellipsis + tooltip with full text. */
+const HEADER_BIO_DISPLAY_MAX = 90;
+
+function formatHeaderBioSnippet(bio) {
+  const s = String(bio || '').trim();
+  if (!s) return '';
+  if (s.length <= HEADER_BIO_DISPLAY_MAX) return s;
+  return s.slice(0, HEADER_BIO_DISPLAY_MAX).trimEnd() + '…';
+}
+
+/** Header: show profile bio under “Welcome …” when signed in and bio is non-empty. */
+function syncHeaderBio() {
+  const el = document.getElementById('authHeaderBio');
+  if (!el) return;
+  if (!currentUser) {
+    el.hidden = true;
+    el.textContent = '';
+    el.removeAttribute('title');
+    return;
+  }
+  const bio = currentProfile && currentProfile.bio != null ? String(currentProfile.bio).trim() : '';
+  if (!bio) {
+    el.hidden = true;
+    el.textContent = '';
+    el.removeAttribute('title');
+    return;
+  }
+  el.hidden = false;
+  const display = formatHeaderBioSnippet(bio);
+  el.textContent = display;
+  if (display.endsWith('…')) {
+    el.title = bio;
+  } else {
+    el.removeAttribute('title');
   }
 }
 
@@ -1544,7 +1587,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const usernameRaw = (settingsUsernameInput?.value || '').trim();
       const username = normalizeUsername(usernameRaw);
-      const bio = (settingsBioInput?.value || '').trim();
+      let bio = (settingsBioInput?.value || '').trim();
+      if (bio.length > SETTINGS_BIO_MAX_LENGTH) bio = bio.slice(0, SETTINGS_BIO_MAX_LENGTH);
+      if (settingsBioInput) settingsBioInput.value = bio;
       if (!username) {
         if (settingsProfileMessage) settingsProfileMessage.textContent = 'Username cannot be empty.';
         return;
@@ -1569,6 +1614,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Profile updated.';
       updateAuthUI();
       updateSettingsAvatarPreview();
+      syncSettingsBioCharCount();
     });
   }
 
@@ -1619,6 +1665,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function syncSettingsBioCharCount() {
+    const countEl = document.getElementById('settingsBioCount');
+    if (!countEl || !settingsBioInput) return;
+    countEl.textContent = String((settingsBioInput.value || '').length);
+  }
+
   function hydrateProfileSettings() {
     if (!settingsUsernameInput || !settingsBioInput) return;
     if (!currentUser) {
@@ -1626,15 +1678,20 @@ document.addEventListener('DOMContentLoaded', () => {
       settingsBioInput.value = '';
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to edit your profile.';
       updateSettingsAvatarPreview();
+      syncSettingsBioCharCount();
       return;
     }
     settingsUsernameInput.value = currentProfile?.username || '';
-    settingsBioInput.value = currentProfile?.bio || '';
+    let bioVal = currentProfile?.bio != null ? String(currentProfile.bio) : '';
+    if (bioVal.length > SETTINGS_BIO_MAX_LENGTH) bioVal = bioVal.slice(0, SETTINGS_BIO_MAX_LENGTH);
+    settingsBioInput.value = bioVal;
     if (settingsProfileMessage) settingsProfileMessage.textContent = '';
     updateSettingsAvatarPreview();
+    syncSettingsBioCharCount();
   }
 
   settingsUsernameInput?.addEventListener('input', () => updateSettingsAvatarPreview());
+  settingsBioInput?.addEventListener('input', syncSettingsBioCharCount);
 
   document.querySelectorAll('.settings-tab').forEach((tab) => {
     tab.addEventListener('click', () => {

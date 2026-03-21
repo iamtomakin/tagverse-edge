@@ -30,7 +30,10 @@
         <button type="button" class="nav-tab" data-screen="settings">Settings</button>
       </nav>
       <div class="auth-bar" aria-live="polite">
-        <span id="authStatus" class="auth-status">Not signed in</span>
+        <div class="auth-welcome-group">
+          <span id="authStatus" class="auth-status">Not signed in</span>
+          <span id="authHeaderBio" class="auth-header-bio" hidden></span>
+        </div>
         <button type="button" id="loginButton" class="auth-btn">Sign in with email</button>
         <button type="button" id="logoutButton" class="auth-btn" hidden>Sign out</button>
       </div>
@@ -364,7 +367,8 @@
                   </div>
                   <div class="settings-field">
                     <label class="settings-label" for="settingsBio">Bio <span class="settings-optional">(optional)</span></label>
-                    <textarea id="settingsBio" class="settings-textarea" rows="3" placeholder="Short line about your trading focus."></textarea>
+                    <textarea id="settingsBio" class="settings-textarea" rows="3" maxlength="120" placeholder="Short line — max 120 characters. Shows in the header when set."></textarea>
+                    <p class="settings-field-hint settings-bio-count" id="settingsBioCharHint"><span id="settingsBioCount">0</span> / 120</p>
                   </div>
                   <div class="settings-actions">
                     <button type="button" id="settingsSaveProfile" class="settings-btn-primary">Save</button>

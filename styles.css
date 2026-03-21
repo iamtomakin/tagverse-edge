@@ -242,11 +242,31 @@ html.theme-light .offline-banner-btn {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.auth-welcome-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  max-width: min(22rem, 48vw);
+  text-align: right;
 }
 
 .auth-status {
   font-size: 0.9rem;
   color: var(--text-secondary);
+}
+
+/* Short bio under welcome — truncated in JS; full text in title tooltip when clipped */
+.auth-header-bio {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  max-width: 100%;
+  word-break: break-word;
 }
 
 .auth-btn {
@@ -2112,4 +2132,11 @@ html.theme-light .settings-primary-btn {
 
 .week-cell.empty-week {
   background: var(--cell-default);
+}
+
+.settings-bio-count {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  opacity: 0.9;
 }
