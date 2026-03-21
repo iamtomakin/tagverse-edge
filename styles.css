@@ -1389,7 +1389,7 @@ html.theme-light .auth-password-toggle:hover {
 
 /* Settings screen — tabbed layout + cards (inspired by modern settings UIs) */
 .screen-settings {
-  padding: 0 1rem 2.5rem;
+  padding: 1.75rem 1rem 2.5rem; /* top: breathing room below app header */
 }
 
 .settings-layout {
