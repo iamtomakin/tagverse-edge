@@ -108,6 +108,9 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- Display name for the built-in "default" strategy (not stored in strategies table)
+alter table public.profiles add column if not exists default_strategy_name text;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "Profiles are readable by everyone" on public.profiles;
@@ -120,6 +123,8 @@ create policy "Users can upsert own profile"
   on public.profiles for all
   using (auth.uid() = id)
   with check (auth.uid() = id);
+
+notify pgrst, 'reload schema';
 
 -- Shared calendars/posts shown on Community page
 create table if not exists public.shared_calendars (

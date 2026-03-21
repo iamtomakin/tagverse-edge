@@ -39,13 +39,46 @@ async function fetchCurrentProfile(userId) {
   return data;
 }
 
+function formatPostgrestError(err) {
+  if (!err) return '';
+  if (!('details' in err) && !('hint' in err) && typeof err.message === 'string') return err.message;
+  const parts = [err.message, err.details, err.hint].filter(Boolean);
+  if (err.code) parts.unshift(`[${err.code}]`);
+  return parts.join(' — ');
+}
+
+/**
+ * Create/update profile row. Uses upsert(onConflict: id), then update/insert fallbacks for stubborn API issues.
+ */
 async function upsertProfile(userId, fields) {
   const supa = initSupabase();
   if (!supa || !userId) return { error: new Error('Supabase not available') };
   const payload = { id: userId, ...fields };
-  const { data, error } = await supa.from('profiles').upsert(payload).select().maybeSingle();
-  if (!error) currentProfile = data;
-  return { data, error };
+  const { id: _rowId, ...updateFields } = payload;
+
+  const tryUpsert = await supa.from('profiles').upsert(payload, { onConflict: 'id' }).select().maybeSingle();
+  if (!tryUpsert.error && tryUpsert.data) {
+    currentProfile = tryUpsert.data;
+    return { data: tryUpsert.data, error: null };
+  }
+
+  const tryUpdate = await supa.from('profiles').update(updateFields).eq('id', userId).select().maybeSingle();
+  if (!tryUpdate.error && tryUpdate.data) {
+    currentProfile = tryUpdate.data;
+    return { data: tryUpdate.data, error: null };
+  }
+
+  const tryInsert = await supa.from('profiles').insert(payload).select().maybeSingle();
+  if (!tryInsert.error && tryInsert.data) {
+    currentProfile = tryInsert.data;
+    return { data: tryInsert.data, error: null };
+  }
+
+  const primary = tryUpsert.error || tryUpdate.error || tryInsert.error;
+  return {
+    data: null,
+    error: new Error(formatPostgrestError(primary) || primary?.message || 'Could not save profile.')
+  };
 }
 
 function loadCurrentMode() {
@@ -118,8 +151,10 @@ function renameStrategy(id, newName) {
   const list = loadStrategies().map((s) => (s.id === id ? { ...s, name: trimmed } : s));
   saveStrategies(list);
   strategies = list;
-  if (currentUser && id !== STRATEGY_DEFAULT_ID && /^[0-9a-f-]{36}$/i.test(id)) {
-    updateStrategyNameInSupabase(currentUser.id, id, trimmed);
+  if (currentUser && id === STRATEGY_DEFAULT_ID) {
+    void persistDefaultStrategyNameToSupabase(trimmed);
+  } else if (currentUser && id !== STRATEGY_DEFAULT_ID && /^[0-9a-f-]{36}$/i.test(id)) {
+    void updateStrategyNameInSupabase(currentUser.id, id, trimmed);
   }
   renderStrategyPills();
   renderCalendar();
@@ -411,7 +446,24 @@ async function updateStrategyNameInSupabase(userId, id, name) {
   const supa = initSupabase();
   if (!supa) return;
   if (id === STRATEGY_DEFAULT_ID) return;
-  await supa.from('strategies').update({ name }).eq('id', id).eq('user_id', userId);
+  const { error } = await supa.from('strategies').update({ name }).eq('id', id).eq('user_id', userId);
+  if (error) console.error('[Tagverse] strategy name update failed', error.message);
+}
+
+/** Sync renamed "Default" strategy label to Supabase (profiles row or auth metadata fallback). */
+async function persistDefaultStrategyNameToSupabase(name) {
+  const supa = initSupabase();
+  if (!supa || !currentUser) return;
+  if (currentProfile) {
+    const { error } = await supa.from('profiles').update({ default_strategy_name: name }).eq('id', currentUser.id);
+    if (error) console.error('[Tagverse] default_strategy_name update failed', error.message);
+    else currentProfile = await fetchCurrentProfile(currentUser.id);
+  } else {
+    const { error } = await supa.auth.updateUser({ data: { default_strategy_name: name } });
+    if (error) console.error('[Tagverse] default_strategy_name (metadata) failed', error.message);
+    const { data } = await supa.auth.getSession();
+    if (data?.session?.user) currentUser = data.session.user;
+  }
 }
 
 async function persistDayResultToSupabase(userId, strategyId, dateKey, instrument, entry) {
@@ -973,25 +1025,49 @@ document.addEventListener('DOMContentLoaded', () => {
       saveDeclarations(declarations);
 
       const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
+      const remoteList = Array.isArray(remoteStrategies) ? remoteStrategies : [];
+      currentProfile = await fetchCurrentProfile(currentUser.id);
       const localStrategies = loadStrategies();
       const localDefault = localStrategies.find((s) => s.id === STRATEGY_DEFAULT_ID);
-      const defaultName = localDefault?.name || 'Default';
+      const defaultName =
+        (currentProfile?.default_strategy_name && String(currentProfile.default_strategy_name).trim()) ||
+        (currentUser?.user_metadata?.default_strategy_name && String(currentUser.user_metadata.default_strategy_name).trim()) ||
+        localDefault?.name ||
+        'Default';
 
-      if (Array.isArray(remoteStrategies) && remoteStrategies.length > 0) {
-        const hasDefaultRemote = remoteStrategies.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
-        const base = hasDefaultRemote ? remoteStrategies : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }, ...remoteStrategies];
-        // Merge any local name overrides (including renamed Default) over remote entries
+      if (remoteList.length > 0) {
+        const hasDefaultRemote = remoteList.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
+        const base = hasDefaultRemote ? remoteList : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }, ...remoteList];
+        const remoteIds = new Set(base.map((s) => s.id));
         strategies = base.map((s) => {
-          const local = localStrategies.find((ls) => ls.id === s.id);
-          return local ? { ...s, name: local.name } : s;
+          if (s.id === STRATEGY_DEFAULT_ID) return { ...s, name: defaultName };
+          return { ...s };
         });
+        for (const ls of localStrategies) {
+          if (!remoteIds.has(ls.id)) strategies.push(ls);
+        }
       } else {
-        strategies = localStrategies.length ? localStrategies : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }];
+        strategies = localStrategies.length
+          ? localStrategies.map((s) => (s.id === STRATEGY_DEFAULT_ID ? { ...s, name: defaultName } : s))
+          : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }];
       }
 
       saveStrategies(strategies);
 
-      currentProfile = await fetchCurrentProfile(currentUser.id);
+      const supaSync = initSupabase();
+      if (supaSync && currentUser) {
+        const seedIds = new Set(remoteList.map((r) => r.id));
+        for (const s of strategies) {
+          if (s.id === STRATEGY_DEFAULT_ID || !/^[0-9a-f-]{36}$/i.test(s.id)) continue;
+          if (!seedIds.has(s.id)) {
+            const { error } = await supaSync.from('strategies').upsert(
+              { id: s.id, user_id: currentUser.id, name: s.name },
+              { onConflict: 'id' }
+            );
+            if (error) console.error('[Tagverse] sync local-only strategy', s.id, error.message);
+          }
+        }
+      }
     } else {
       dailyResults = loadDailyResults();
       declarations = loadDeclarations();
@@ -1413,10 +1489,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       settingsSaveProfileBtn.disabled = true;
       if (settingsProfileMessage) settingsProfileMessage.textContent = '';
-      const { error } = await upsertProfile(currentUser.id, { username, bio: bio || null });
+      const profilePayload = { username, bio: bio || null };
+      if (currentProfile?.default_strategy_name != null && currentProfile.default_strategy_name !== '') {
+        profilePayload.default_strategy_name = currentProfile.default_strategy_name;
+      }
+      const { error } = await upsertProfile(currentUser.id, profilePayload);
       settingsSaveProfileBtn.disabled = false;
       if (error) {
-        settingsProfileMessage.textContent = error.message || 'Could not save profile.';
+        settingsProfileMessage.textContent = formatPostgrestError(error) || error.message || 'Could not save profile.';
         return;
       }
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Profile updated.';
