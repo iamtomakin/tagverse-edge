@@ -1,6 +1,5 @@
--- Run this whole script in Supabase → SQL Editor if you get:
---   ERROR: relation "public.profiles" does not exist
--- It creates `profiles` (if missing) + default_strategy_name + RLS policies.
+-- Same as supabase-profiles-setup.sql — kept for backwards compatibility.
+-- Prefer opening and running: supabase-profiles-setup.sql
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -25,9 +24,7 @@ create policy "Users can upsert own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- PostgREST API roles (helps avoid PGRST205 after creating the table)
 grant usage on schema public to anon, authenticated, service_role;
 grant all on table public.profiles to anon, authenticated, service_role;
 
--- Reload schema cache (if you still see PGRST205, run supabase-fix-pgrst205-profiles.sql and check Data API → Exposed schemas → public)
 notify pgrst, 'reload schema';

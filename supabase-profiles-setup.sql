@@ -1,14 +1,15 @@
 -- =============================================================================
--- Fix [PGRST205] "Could not find the table 'public.profiles' in the schema cache"
--- Run this ENTIRE file in Supabase → SQL Editor (same project as your SUPABASE_URL).
+-- Profile table setup for Tagverse Edge (run on your Supabase project:
+-- e.g. iyrqvxizbdzjdkjykwdq — same project as index.html SUPABASE_URL)
 -- =============================================================================
--- ALSO CHECK IN DASHBOARD (critical):
---   Project Settings → Data API → "Exposed schemas" must include "public".
---   If "public" is missing, add it and save, then run this script again.
--- If error persists after this: Project Settings → General → Pause project → Resume.
+-- Run the ENTIRE script in: Supabase Dashboard → SQL Editor → Run
+-- Safe to re-run (IF NOT EXISTS / DROP POLICY IF EXISTS).
+--
+-- BEFORE YOU RUN (if Save profile still fails with PGRST205 after this):
+--   • Project Settings → Data API → ensure "public" is in Exposed schemas → Save
+--   • Then run this script again, or: Project Settings → General → Pause → Resume
 -- =============================================================================
 
--- Table + column (safe to re-run)
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text not null unique,
@@ -32,9 +33,7 @@ create policy "Users can upsert own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- PostgREST must be able to resolve the table for the API roles
 grant usage on schema public to anon, authenticated, service_role;
 grant all on table public.profiles to anon, authenticated, service_role;
 
--- Force PostgREST to reload its schema cache
 notify pgrst, 'reload schema';
