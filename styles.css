@@ -745,9 +745,14 @@ html.theme-light .auth-password-toggle:hover {
   outline-offset: 2px;
 }
 
-.auth-password-toggle svg {
+/* Do not set display:block on all svgs — it overrides the [hidden] attribute and shows both icons */
+.auth-password-toggle svg:not([hidden]) {
   display: block;
   flex-shrink: 0;
+}
+
+.auth-password-toggle svg[hidden] {
+  display: none !important;
 }
 
 .auth-modal-switch {
