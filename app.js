@@ -882,16 +882,30 @@ function updateAuthUI() {
   syncHeaderBio();
 }
 
-/** Max length for bio in Settings (stored in Supabase). */
-const SETTINGS_BIO_MAX_LENGTH = 120;
-/** Max characters shown in the header before ellipsis + tooltip with full text. */
-const HEADER_BIO_DISPLAY_MAX = 90;
+/** Profile bio: max words (primary rule) and hard char cap (keeps header one line). */
+const MAX_BIO_WORDS = 5;
+const MAX_BIO_CHARS = 55;
 
-function formatHeaderBioSnippet(bio) {
-  const s = String(bio || '').trim();
-  if (!s) return '';
-  if (s.length <= HEADER_BIO_DISPLAY_MAX) return s;
-  return s.slice(0, HEADER_BIO_DISPLAY_MAX).trimEnd() + '…';
+function countBioWords(str) {
+  return String(str || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+/** Clamp to at most MAX_BIO_WORDS words and MAX_BIO_CHARS (drops words from the end if too long). */
+function clampBio(raw) {
+  let words = String(raw || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, MAX_BIO_WORDS);
+  let s = words.join(' ');
+  while (s.length > MAX_BIO_CHARS && words.length > 0) {
+    words = words.slice(0, -1);
+    s = words.join(' ');
+  }
+  return s;
 }
 
 /** Header: show profile bio under “Welcome …” when signed in and bio is non-empty. */
@@ -904,7 +918,8 @@ function syncHeaderBio() {
     el.removeAttribute('title');
     return;
   }
-  const bio = currentProfile && currentProfile.bio != null ? String(currentProfile.bio).trim() : '';
+  const raw = currentProfile && currentProfile.bio != null ? String(currentProfile.bio) : '';
+  const bio = clampBio(raw);
   if (!bio) {
     el.hidden = true;
     el.textContent = '';
@@ -912,13 +927,8 @@ function syncHeaderBio() {
     return;
   }
   el.hidden = false;
-  const display = formatHeaderBioSnippet(bio);
-  el.textContent = display;
-  if (display.endsWith('…')) {
-    el.title = bio;
-  } else {
-    el.removeAttribute('title');
-  }
+  el.textContent = bio;
+  el.title = bio;
 }
 
 function showScreen(screenId) {
@@ -1587,8 +1597,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const usernameRaw = (settingsUsernameInput?.value || '').trim();
       const username = normalizeUsername(usernameRaw);
-      let bio = (settingsBioInput?.value || '').trim();
-      if (bio.length > SETTINGS_BIO_MAX_LENGTH) bio = bio.slice(0, SETTINGS_BIO_MAX_LENGTH);
+      let bio = clampBio(settingsBioInput?.value || '');
       if (settingsBioInput) settingsBioInput.value = bio;
       if (!username) {
         if (settingsProfileMessage) settingsProfileMessage.textContent = 'Username cannot be empty.';
@@ -1614,7 +1623,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Profile updated.';
       updateAuthUI();
       updateSettingsAvatarPreview();
-      syncSettingsBioCharCount();
+      syncSettingsBioWordCount();
     });
   }
 
@@ -1665,10 +1674,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function syncSettingsBioCharCount() {
+  function syncSettingsBioWordCount() {
     const countEl = document.getElementById('settingsBioCount');
     if (!countEl || !settingsBioInput) return;
-    countEl.textContent = String((settingsBioInput.value || '').length);
+    countEl.textContent = String(countBioWords(settingsBioInput.value));
+  }
+
+  function onSettingsBioInput() {
+    if (!settingsBioInput) return;
+    const next = clampBio(settingsBioInput.value);
+    if (next !== settingsBioInput.value) settingsBioInput.value = next;
+    syncSettingsBioWordCount();
   }
 
   function hydrateProfileSettings() {
@@ -1678,20 +1694,18 @@ document.addEventListener('DOMContentLoaded', () => {
       settingsBioInput.value = '';
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to edit your profile.';
       updateSettingsAvatarPreview();
-      syncSettingsBioCharCount();
+      syncSettingsBioWordCount();
       return;
     }
     settingsUsernameInput.value = currentProfile?.username || '';
-    let bioVal = currentProfile?.bio != null ? String(currentProfile.bio) : '';
-    if (bioVal.length > SETTINGS_BIO_MAX_LENGTH) bioVal = bioVal.slice(0, SETTINGS_BIO_MAX_LENGTH);
-    settingsBioInput.value = bioVal;
+    settingsBioInput.value = clampBio(currentProfile?.bio != null ? String(currentProfile.bio) : '');
     if (settingsProfileMessage) settingsProfileMessage.textContent = '';
     updateSettingsAvatarPreview();
-    syncSettingsBioCharCount();
+    syncSettingsBioWordCount();
   }
 
   settingsUsernameInput?.addEventListener('input', () => updateSettingsAvatarPreview());
-  settingsBioInput?.addEventListener('input', syncSettingsBioCharCount);
+  settingsBioInput?.addEventListener('input', onSettingsBioInput);
 
   document.querySelectorAll('.settings-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
