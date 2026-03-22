@@ -1387,6 +1387,49 @@ html.theme-light .settings-avatar {
   cursor: not-allowed;
 }
 
+.settings-btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.55rem 1.1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color var(--transition-ease), color var(--transition-ease);
+}
+
+.settings-btn-secondary:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.theme-light .settings-btn-secondary {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+html.theme-light .settings-btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.settings-textarea-mono {
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.settings-card-log-r code {
+  font-size: 0.8em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.theme-light .settings-card-log-r code {
+  background: rgba(0, 0, 0, 0.06);
+}
+
 html.theme-light .settings-btn-primary {
   background: #1a1a1a;
   color: #fff;

@@ -1,5 +1,15 @@
 # Tagverse Edge
 
+## Data architecture
+
+**Supabase** = source of truth (Postgres + Auth) for persisted domain data when signed in.
+
+**In-memory state** = UI state — not a competing master copy.
+
+**localStorage** = temporary cache only, never authoritative. Optional; it must not quietly become a second source of truth. Reconcile from Supabase after sign-in; don’t prefer cache over server for domain data.
+
+---
+
 ## Local preview (static site)
 
 From this folder:

@@ -6,9 +6,9 @@ create table if not exists public.daily_results (
   user_id uuid not null references auth.users(id) on delete cascade,
   date_key text not null,
   instrument text not null,
-  total_r int not null,
+  total_r numeric not null,
   trade_count int not null,
-  trade_1_r int,
+  trade_1_r numeric,
   unique(user_id, date_key, instrument)
 );
 
@@ -111,6 +111,7 @@ create table if not exists public.profiles (
 -- Display name for the built-in "default" strategy (not stored in strategies table)
 alter table public.profiles add column if not exists default_strategy_name text;
 alter table public.profiles add column if not exists journal_options jsonb;
+alter table public.profiles add column if not exists log_r_options jsonb;
 
 alter table public.profiles enable row level security;
 

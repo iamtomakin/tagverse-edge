@@ -36,7 +36,11 @@ You should see **Profile updated.** and a row in **Table Editor → `public.prof
 |------|--------|
 | `supabase-profiles-setup.sql` | **Run this** in SQL Editor |
 | `supabase-profiles-journal-options.sql` | Adds `journal_options` (categories / emotions / risk labels) if your DB is older |
+| `supabase-profiles-log-r-options.sql` | Adds `log_r_options` (JSON array of R values for the calendar log modal) |
+| `supabase-daily-results-total-r-numeric.sql` | Changes `daily_results.total_r` / `trade_1_r` to `numeric` so fractional R can sync |
 
 **Daily Log vocabulary (signed-in users):** After adding `journal_options`, custom categories and related pickers sync to `profiles.journal_options`. Run the small migration file above if `upsert` logs errors about unknown column.
+
+**Log R buttons:** Settings → **Basics** → **Log R buttons** edits the list; when signed in, values sync to `profiles.log_r_options`. Run `supabase-profiles-log-r-options.sql` if the column is missing. For **fractional** R in the database, run `supabase-daily-results-total-r-numeric.sql` (existing `int` rows convert cleanly).
 | `supabase-profiles-bootstrap.sql` | Same logic (legacy name); use **setup** file above |
 | `supabase-schema.sql` | Full project schema (includes `profiles` + other tables) |

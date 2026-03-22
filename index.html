@@ -154,16 +154,7 @@
         <p id="logModalComparison" class="log-modal-comparison" hidden></p>
         <div id="logModalOutcome" class="log-modal-section">
           <p class="log-modal-label">How did it go?</p>
-          <div class="log-modal-options log-options-r" role="group" aria-label="Day outcome R">
-            <button type="button" class="log-option r-option" data-r="-2">-2R</button>
-            <button type="button" class="log-option r-option" data-r="-1">-1R</button>
-            <button type="button" class="log-option r-option" data-r="0">0</button>
-            <button type="button" class="log-option r-option" data-r="1">1R</button>
-            <button type="button" class="log-option r-option" data-r="2">+2R</button>
-            <button type="button" class="log-option r-option" data-r="3">+3R</button>
-            <button type="button" class="log-option r-option" data-r="4">+4R</button>
-            <button type="button" class="log-option r-option" data-r="5">+5R</button>
-          </div>
+          <div id="logModalROptions" class="log-modal-options log-options-r" role="group" aria-label="Day outcome R"></div>
         </div>
         <div class="log-modal-actions">
           <button type="button" class="log-modal-clear" id="logModalClear">Clear</button>
@@ -444,6 +435,22 @@
             <article class="settings-card">
               <h2 class="settings-card-title">Account</h2>
               <p class="settings-card-lead" id="settingsAccountMeta">Sign in with email to sync your data.</p>
+            </article>
+            <article class="settings-card settings-card-log-r">
+              <h2 class="settings-card-title">Log R buttons</h2>
+              <p class="settings-card-lead">
+                Comma-separated numbers for the calendar <strong>Log day</strong> modal. Signed-in users sync this to the cloud with their profile.
+              </p>
+              <div class="settings-field">
+                <label class="settings-label" for="settingsLogROptions">R values</label>
+                <textarea id="settingsLogROptions" class="settings-textarea settings-textarea-mono" rows="2" placeholder="-2, -1, 0, 1, 2, 3, 4, 5"></textarea>
+                <p class="settings-field-hint">Use integers or decimals (−100 to +100). Run <code>supabase-daily-results-total-r-numeric.sql</code> on Supabase if fractional R should sync to the database.</p>
+              </div>
+              <div class="settings-actions">
+                <button type="button" id="settingsSaveLogROptions" class="settings-btn-primary">Save</button>
+                <button type="button" id="settingsResetLogROptions" class="settings-btn-secondary">Reset to default</button>
+                <p class="settings-inline-msg" id="settingsLogROptionsMessage" role="status"></p>
+              </div>
             </article>
             <p class="settings-tagline">Tagverse Edge — behavioural trading dashboard</p>
           </section>

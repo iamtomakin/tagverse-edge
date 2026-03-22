@@ -1,8 +1,23 @@
 /**
  * Tagverse Edge — Calendar, declarations, log modal, analytics, share, settings
+ *
+ * ---------------------------------------------------------------------------
+ * DATA CONTRACT (do not regress — wording matters)
+ * ---------------------------------------------------------------------------
+ * Supabase = source of truth (Postgres + Auth) for persisted domain data when
+ * the user is signed in and the app is online.
+ *
+ * In-memory state (module-level vars + what the UI reads) = UI state — always
+ * derived from the truth above after load/sync, never “because localStorage said so.”
+ *
+ * localStorage = temporary cache ONLY — never authoritative. It may hydrate the
+ * UI before a network round-trip, or hold prefs (theme, journal vocabulary,
+ * log R button list, etc.), but must not silently become a second master copy.
+ * If signed in, reconcile from Supabase; do not treat cache misses/wins as competing truth.
+ * ---------------------------------------------------------------------------
  */
 
-const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy', journalEntries: 'tagverse_journal_entries', journalOptions: 'tagverse_journal_options' };
+const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy', journalEntries: 'tagverse_journal_entries', journalOptions: 'tagverse_journal_options', logROptions: 'tagverse_log_r_options' };
 
 const STRATEGY_DEFAULT_ID = 'default';
 
@@ -455,8 +470,12 @@ async function fetchDailyResultsFromSupabase(userId) {
     const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
     if (!out[sid]) out[sid] = {};
     if (!out[sid][r.date_key]) out[sid][r.date_key] = {};
-    out[sid][r.date_key][r.instrument] = { totalR: r.total_r, tradeCount: r.trade_count };
-    if (r.trade_1_r != null) out[sid][r.date_key][r.instrument].trade_1_r = r.trade_1_r;
+    const tr = r.total_r;
+    const t1 = r.trade_1_r;
+    const totalR = typeof tr === 'string' ? parseFloat(tr) : Number(tr);
+    const trade1r = t1 == null ? null : typeof t1 === 'string' ? parseFloat(t1) : Number(t1);
+    out[sid][r.date_key][r.instrument] = { totalR: Number.isFinite(totalR) ? totalR : 0, tradeCount: r.trade_count };
+    if (trade1r != null && Number.isFinite(trade1r)) out[sid][r.date_key][r.instrument].trade_1_r = trade1r;
   });
   return out;
 }
@@ -589,7 +608,8 @@ let journalPickerKind = null;
 let journalPickerAnchorEl = null;
 let journalDraftEmotions = [];
 let journalDraftCategories = [];
-let journalOptionsSyncTimer = null;
+/** Debounced sync of journal_options + log_r_options to profiles when signed in. */
+let profilePreferencesSyncTimer = null;
 let journalImageDraft = { before: null, after: null };
 /** Notion-style option editor (rename / color / delete) */
 let journalOptionEditKind = null;
@@ -622,6 +642,7 @@ function flushAllLocalDataToStorage() {
     saveSelectedStrategyId(selectedStrategyId);
     saveSelectedInstrument(selectedInstrument);
     saveCurrentMode(currentMode);
+    saveLogROptions(loadLogROptions(), { skipSync: true });
   } catch (e) {
     console.error('[Tagverse] flush local storage failed', e);
   }
@@ -634,10 +655,24 @@ function formatDateKey(date) {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * Format R for UI (calendar, analytics). Supports fractional R when stored as number.
+ * Zero is shown as "—" style dash (breakeven).
+ */
 function formatR(r) {
-  if (r === 0) return '-';
-  if (r < 0) return `${r}R`;
-  return r === 1 ? '1R' : `+${r}R`;
+  const n = Number(r);
+  if (!Number.isFinite(n)) return '—';
+  if (n === 0) return '-';
+  const fmtAbs = (x) => {
+    const a = Math.abs(x);
+    if (Number.isInteger(a)) return String(a);
+    let s = a.toFixed(4).replace(/\.?0+$/, '');
+    if (s === '' || s === '-') s = '0';
+    return s;
+  };
+  if (n < 0) return `-${fmtAbs(n)}R`;
+  const abs = fmtAbs(n);
+  return n === 1 ? '1R' : `+${abs}R`;
 }
 
 function getWeekRange(year, month, weekNum) {
@@ -1090,8 +1125,112 @@ function saveJournalOptions(opts, flags) {
     console.error('[Tagverse] save journal options failed', e);
   }
   if (!flags?.skipSync) {
-    scheduleJournalOptionsSyncToProfile();
+    scheduleProfilePreferencesSync();
   }
+}
+
+/** Default R buttons on the calendar log modal (same as original hard-coded set). */
+const DEFAULT_LOG_R_VALUES = [-2, -1, 0, 1, 2, 3, 4, 5];
+
+function roundRKey(n) {
+  return Math.round(n * 10000) / 10000;
+}
+
+/**
+ * Normalize user-defined R list: finite numbers in [-100, 100], deduped, sorted ascending.
+ * @returns {number[]}
+ */
+function normalizeLogROptions(input) {
+  if (!Array.isArray(input)) return [...DEFAULT_LOG_R_VALUES];
+  const seen = new Set();
+  const nums = [];
+  for (const x of input) {
+    const n = typeof x === 'number' ? x : parseFloat(String(x).trim().replace(/,/g, ''));
+    if (!Number.isFinite(n)) continue;
+    if (n < -100 || n > 100) continue;
+    const r = roundRKey(n);
+    const k = String(r);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    nums.push(r);
+  }
+  nums.sort((a, b) => a - b);
+  return nums.length >= 1 ? nums : [...DEFAULT_LOG_R_VALUES];
+}
+
+/** Parse comma / space / semicolon separated values from settings. */
+function parseLogROptionsFromTextField(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [...DEFAULT_LOG_R_VALUES];
+  const parts = s.split(/[\s,;]+/).filter(Boolean);
+  return normalizeLogROptions(parts.map((p) => parseFloat(p)));
+}
+
+function logROptionsFromRemoteProfileOnly(remote) {
+  if (remote == null) return null;
+  if (Array.isArray(remote)) return normalizeLogROptions(remote.map((x) => (typeof x === 'number' ? x : parseFloat(x))));
+  if (typeof remote === 'object' && Array.isArray(remote.values)) {
+    return normalizeLogROptions(remote.values.map((x) => (typeof x === 'number' ? x : parseFloat(x))));
+  }
+  return null;
+}
+
+function loadLogROptions() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.logROptions);
+    if (!raw) return [...DEFAULT_LOG_R_VALUES];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return normalizeLogROptions(parsed);
+  } catch (_) {}
+  return [...DEFAULT_LOG_R_VALUES];
+}
+
+function saveLogROptions(values, flags) {
+  const arr = normalizeLogROptions(Array.isArray(values) ? values : loadLogROptions());
+  try {
+    localStorage.setItem(STORAGE_KEYS.logROptions, JSON.stringify(arr));
+  } catch (e) {
+    console.error('[Tagverse] save log R options failed', e);
+  }
+  if (!flags?.skipSync) {
+    scheduleProfilePreferencesSync();
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Button label for log modal (0 stays "0", not "—"). */
+function formatLogRButtonLabel(r) {
+  const n = Number(r);
+  if (!Number.isFinite(n)) return '?';
+  if (n === 0) return '0';
+  if (n < 0) {
+    const abs = Math.abs(n);
+    const t = Number.isInteger(n) ? String(abs) : String(roundRKey(abs)).replace(/\.?0+$/, '');
+    return `-${t}R`;
+  }
+  const abs = Math.abs(n);
+  const t = Number.isInteger(n) ? String(abs) : String(roundRKey(abs)).replace(/\.?0+$/, '');
+  return n === 1 ? '1R' : `+${t}R`;
+}
+
+function renderLogModalROptions() {
+  const wrap = document.getElementById('logModalROptions');
+  if (!wrap) return;
+  const vals = loadLogROptions();
+  wrap.innerHTML = vals
+    .map((r) => {
+      const label = formatLogRButtonLabel(r);
+      const dr = String(roundRKey(Number(r)));
+      return `<button type="button" class="log-option r-option" data-r="${escapeHtml(dr)}">${escapeHtml(label)}</button>`;
+    })
+    .join('');
 }
 
 /**
@@ -1146,16 +1285,16 @@ function mergeJournalOptionsObjects(local, remote) {
   };
 }
 
-function scheduleJournalOptionsSyncToProfile() {
+function scheduleProfilePreferencesSync() {
   if (!currentUser || !isSupabaseEnabled()) return;
-  clearTimeout(journalOptionsSyncTimer);
-  journalOptionsSyncTimer = setTimeout(() => {
-    journalOptionsSyncTimer = null;
-    void syncJournalOptionsToProfile();
+  clearTimeout(profilePreferencesSyncTimer);
+  profilePreferencesSyncTimer = setTimeout(() => {
+    profilePreferencesSyncTimer = null;
+    void syncProfilePreferencesToSupabase();
   }, 500);
 }
 
-async function syncJournalOptionsToProfile() {
+async function syncProfilePreferencesToSupabase() {
   if (!currentUser || !isSupabaseEnabled()) return;
   let profile = currentProfile;
   if (!profile?.username) {
@@ -1164,14 +1303,16 @@ async function syncJournalOptionsToProfile() {
   }
   if (!profile?.username) return;
   const opts = loadJournalOptions();
+  const logR = loadLogROptions();
   const { error } = await upsertProfile(currentUser.id, {
     username: profile.username,
     bio: profile.bio ?? null,
     avatar_url: profile.avatar_url ?? null,
     default_strategy_name: profile.default_strategy_name ?? null,
-    journal_options: opts
+    journal_options: opts,
+    log_r_options: logR
   });
-  if (error) console.warn('[Tagverse] journal_options sync failed', error.message || error);
+  if (error) console.warn('[Tagverse] profile preferences sync failed', error.message || error);
 }
 
 /** Remember a user-typed value in the vocabulary for pickers. */
@@ -2249,16 +2390,15 @@ function isPastDate(date) {
 
 function openLogModal(date) {
   logModalTargetDate = new Date(date);
-  const key = formatDateKey(logModalTargetDate);
   const modal = document.getElementById('logModal');
   const title = document.getElementById('logModalTitle');
   const outcomeSection = document.getElementById('logModalOutcome');
   const comparisonLine = document.getElementById('logModalComparison');
-  const past = isPastDate(logModalTargetDate);
   title.textContent = logModalTargetDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const instrumentLabel = document.getElementById('logModalInstrument');
   if (instrumentLabel) instrumentLabel.textContent = 'Logging for ' + selectedInstrument;
   if (outcomeSection) outcomeSection.hidden = false;
+  renderLogModalROptions();
   comparisonLine.hidden = true;
   comparisonLine.textContent = '';
   modal.hidden = false;
@@ -2281,17 +2421,24 @@ function saveDeclarationFromModal(tradeCountPlanned) {
   renderCalendar();
 }
 
-/** Trade count for logging: legacy rules for ±1R/±2R; flat day for 0 and +3R–+5R. */
+/**
+ * Trade count for logging: legacy integer rules for ±1R/±2R only; other outcomes default to 1 trade.
+ * Custom fractional R always uses 1 trade.
+ */
 function tradeCountForOutcome(totalR) {
-  if (totalR === 2 || totalR === -2) return totalR === 2 ? 1 : 2;
-  if (totalR === 1 || totalR === -1) return totalR === 1 ? 2 : 1;
+  const n = Number(totalR);
+  if (!Number.isFinite(n)) return 1;
+  if (!Number.isInteger(n)) return 1;
+  if (n === 2 || n === -2) return n === 2 ? 1 : 2;
+  if (n === 1 || n === -1) return n === 1 ? 2 : 1;
   return 1;
 }
 
 function saveOutcomeFromModal(r) {
   if (!logModalTargetDate) return;
   const key = formatDateKey(logModalTargetDate);
-  const totalR = Number(r);
+  const totalR = parseFloat(String(r));
+  if (!Number.isFinite(totalR)) return;
   const tradeCount = tradeCountForOutcome(totalR);
   setDayResult(key, selectedInstrument, totalR, tradeCount);
   const comparisonEl = document.getElementById('logModalComparison');
@@ -2331,7 +2478,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const replaced = journalOptionsFromRemoteProfileOnly(currentProfile.journal_options);
         if (replaced) saveJournalOptions(replaced, { skipSync: true });
       }
-      void syncJournalOptionsToProfile();
+      if (currentProfile?.log_r_options != null) {
+        const lr = logROptionsFromRemoteProfileOnly(currentProfile.log_r_options);
+        if (lr) saveLogROptions(lr, { skipSync: true });
+      }
+      void syncProfilePreferencesToSupabase();
 
       const localStrategies = loadStrategies();
       const localDefault = localStrategies.find((s) => s.id === STRATEGY_DEFAULT_ID);
@@ -2784,6 +2935,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const settingsConfirmPassword = document.getElementById('settingsConfirmPassword');
   const settingsChangePasswordBtn = document.getElementById('settingsChangePassword');
   const settingsPasswordMessage = document.getElementById('settingsPasswordMessage');
+  const settingsLogROptionsInput = document.getElementById('settingsLogROptions');
+  const settingsSaveLogROptionsBtn = document.getElementById('settingsSaveLogROptions');
+  const settingsResetLogROptionsBtn = document.getElementById('settingsResetLogROptions');
+  const settingsLogROptionsMessage = document.getElementById('settingsLogROptionsMessage');
 
   if (loginButton) loginButton.textContent = 'Sign in with email';
 
@@ -2967,11 +3122,15 @@ document.addEventListener('DOMContentLoaded', () => {
       settingsSaveProfileBtn.disabled = true;
       if (settingsProfileMessage) settingsProfileMessage.textContent = '';
       if (settingsUsernameInput) settingsUsernameInput.value = username;
+      if (settingsLogROptionsInput) {
+        saveLogROptions(parseLogROptionsFromTextField(settingsLogROptionsInput.value), { skipSync: true });
+      }
       const profilePayload = { username, bio: bio || null };
       if (currentProfile?.default_strategy_name != null && currentProfile.default_strategy_name !== '') {
         profilePayload.default_strategy_name = currentProfile.default_strategy_name;
       }
       profilePayload.journal_options = loadJournalOptions();
+      profilePayload.log_r_options = loadLogROptions();
       const { error } = await upsertProfile(currentUser.id, profilePayload);
       settingsSaveProfileBtn.disabled = false;
       if (error) {
@@ -2982,6 +3141,67 @@ document.addEventListener('DOMContentLoaded', () => {
       updateAuthUI();
       updateSettingsAvatarPreview();
       syncCalendarUserBio();
+    });
+  }
+
+  if (settingsSaveLogROptionsBtn && settingsLogROptionsInput) {
+    settingsSaveLogROptionsBtn.addEventListener('click', async () => {
+      const parsed = parseLogROptionsFromTextField(settingsLogROptionsInput.value);
+      saveLogROptions(parsed, { skipSync: true });
+      hydrateLogROptionsSettings();
+      renderLogModalROptions();
+      if (!currentUser) {
+        if (settingsLogROptionsMessage) settingsLogROptionsMessage.textContent = 'Saved on this device.';
+        return;
+      }
+      settingsSaveLogROptionsBtn.disabled = true;
+      if (settingsLogROptionsMessage) settingsLogROptionsMessage.textContent = '';
+      let profile = currentProfile;
+      if (!profile?.username) {
+        if (settingsLogROptionsMessage) {
+          settingsLogROptionsMessage.textContent = 'Set a username under Profile first so options can sync to the cloud.';
+        }
+        settingsSaveLogROptionsBtn.disabled = false;
+        return;
+      }
+      const { error } = await upsertProfile(currentUser.id, {
+        username: profile.username,
+        bio: profile.bio ?? null,
+        avatar_url: profile.avatar_url ?? null,
+        default_strategy_name: profile.default_strategy_name ?? null,
+        journal_options: loadJournalOptions(),
+        log_r_options: loadLogROptions()
+      });
+      settingsSaveLogROptionsBtn.disabled = false;
+      if (error) {
+        if (settingsLogROptionsMessage) {
+          settingsLogROptionsMessage.textContent = formatPostgrestError(error) || error.message || 'Could not sync.';
+        }
+        return;
+      }
+      if (settingsLogROptionsMessage) settingsLogROptionsMessage.textContent = 'Saved and synced.';
+    });
+  }
+
+  if (settingsResetLogROptionsBtn) {
+    settingsResetLogROptionsBtn.addEventListener('click', () => {
+      saveLogROptions([...DEFAULT_LOG_R_VALUES], { skipSync: true });
+      hydrateLogROptionsSettings();
+      renderLogModalROptions();
+      if (settingsLogROptionsMessage) {
+        settingsLogROptionsMessage.textContent = currentUser
+          ? 'Reset to default. Syncing to cloud…'
+          : 'Reset to default on this device.';
+      }
+      if (currentUser) {
+        void syncProfilePreferencesToSupabase().then(() => {
+          if (settingsLogROptionsMessage) {
+            settingsLogROptionsMessage.textContent = currentProfile?.username
+              ? 'Reset to default and synced.'
+              : 'Reset on this device. Save a username under Profile to sync.';
+          }
+        });
+      }
     });
   }
 
@@ -3038,6 +3258,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (next !== settingsBioInput.value) settingsBioInput.value = next;
   }
 
+  function hydrateLogROptionsSettings() {
+    if (!settingsLogROptionsInput) return;
+    settingsLogROptionsInput.value = loadLogROptions().join(', ');
+    if (settingsLogROptionsMessage) settingsLogROptionsMessage.textContent = '';
+  }
+
   function hydrateProfileSettings() {
     if (!settingsUsernameInput || !settingsBioInput) return;
     if (!currentUser) {
@@ -3045,6 +3271,7 @@ document.addEventListener('DOMContentLoaded', () => {
       settingsBioInput.value = '';
       if (settingsProfileMessage) settingsProfileMessage.textContent = 'Sign in to edit your profile.';
       updateSettingsAvatarPreview();
+      hydrateLogROptionsSettings();
       return;
     }
     settingsUsernameInput.value = currentProfile?.username || '';
@@ -3053,6 +3280,7 @@ document.addEventListener('DOMContentLoaded', () => {
     );
     if (settingsProfileMessage) settingsProfileMessage.textContent = '';
     updateSettingsAvatarPreview();
+    hydrateLogROptionsSettings();
   }
 
   settingsUsernameInput?.addEventListener('input', () => updateSettingsAvatarPreview());
@@ -3105,9 +3333,10 @@ document.addEventListener('DOMContentLoaded', () => {
   declareOpts.forEach((btn) => {
     btn.addEventListener('click', () => saveDeclarationFromModal(Number(btn.dataset.value)));
   });
-  const outcomeOpts = document.querySelectorAll('.r-option[data-r]');
-  outcomeOpts.forEach((btn) => {
-    btn.addEventListener('click', () => saveOutcomeFromModal(btn.dataset.r));
+  document.getElementById('logModalROptions')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.r-option[data-r]');
+    if (!btn) return;
+    saveOutcomeFromModal(btn.getAttribute('data-r'));
   });
 
   document.getElementById('prevMonth')?.addEventListener('click', prevMonth);

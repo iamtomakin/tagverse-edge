@@ -103,9 +103,19 @@
         noTokenEl.textContent = 'Invalid or expired snapshot link.';
       }
       function formatR(r) {
-        if (r === 0) return '-';
-        if (r < 0) return r + 'R';
-        return r === 1 ? '1R' : '+' + r + 'R';
+        const n = Number(r);
+        if (!Number.isFinite(n)) return '—';
+        if (n === 0) return '-';
+        const fmtAbs = (x) => {
+          const a = Math.abs(x);
+          if (Number.isInteger(a)) return String(a);
+          let s = a.toFixed(4).replace(/\.?0+$/, '');
+          if (s === '' || s === '-') s = '0';
+          return s;
+        };
+        if (n < 0) return '-' + fmtAbs(n) + 'R';
+        const abs = fmtAbs(n);
+        return n === 1 ? '1R' : '+' + abs + 'R';
       }
     })();
   </script>

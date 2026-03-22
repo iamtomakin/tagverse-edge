@@ -1,0 +1,25 @@
+---
+description: Supabase is source of truth; localStorage is cache only (Tagverse Edge)
+alwaysApply: true
+---
+
+# Data architecture (Tagverse Edge)
+
+## Contract
+
+- **Supabase (Postgres + Auth)** = **source of truth** for persisted domain data when the user is signed in and the app can reach the network.
+- **In-memory state** = **UI state** — derived from truth after load/sync; never authoritative because “localStorage said so.”
+- **localStorage** = **temporary cache only, never authoritative.** It may hydrate before a round-trip or hold harmless prefs (theme, etc.). It must **not** become a second master copy.
+
+## When changing persistence code
+
+- **Signed in:** writes go **through Supabase** for domain data (calendar rows, strategies, profile fields, etc.). Do not add new flows that only update `localStorage` for data that should be shared across devices.
+- **Reads:** after sign-in, reconcile from Supabase (`applyAuthState` / explicit fetches). Treat `localStorage` reads as cache hydration, not proof of correctness.
+- **Do not** introduce “merge local wins” or silent dual-write patterns without an explicit product decision and comment.
+
+## Files of interest
+
+- `app.js` — top-of-file **DATA CONTRACT** comment; `STORAGE_KEYS`, `load*` / `save*` helpers, `applyAuthState`.
+- `supabase-schema.sql` / migrations — RLS, `user_id`, unique constraints aligned with client `upsert` keys.
+
+If adding **journal entries** or new entities: new Postgres tables + RLS; wire reads/writes in `app.js` — not another local-only master store.
