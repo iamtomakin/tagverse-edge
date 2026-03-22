@@ -112,6 +112,7 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists default_strategy_name text;
 alter table public.profiles add column if not exists journal_options jsonb;
 alter table public.profiles add column if not exists log_r_options jsonb;
+alter table public.profiles add column if not exists calendar_preferences jsonb;
 
 alter table public.profiles enable row level security;
 

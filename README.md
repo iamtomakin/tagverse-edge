@@ -10,6 +10,16 @@
 
 ---
 
+## Deployment (Vercel)
+
+This app is deployed on **Vercel** (repo connected to Git).
+
+- Push to the branch Vercel uses (e.g. `main`) → **automatic redeploy**.
+- No `vercel.json` is required for a plain static site; the project root is the site root (`index.html` at top level).
+- After deploy, **hard refresh** the live URL if the browser still serves an old `app.js` from cache.
+
+---
+
 ## Local preview (static site)
 
 From this folder:

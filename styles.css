@@ -1419,6 +1419,15 @@ html.theme-light .settings-btn-secondary:hover {
   line-height: 1.45;
 }
 
+.settings-field-sync {
+  margin-top: 1rem;
+}
+
+.settings-sync-lead {
+  margin-top: 0.5rem;
+  max-width: 36rem;
+}
+
 .settings-card-log-r code {
   font-size: 0.8em;
   padding: 0.1em 0.35em;

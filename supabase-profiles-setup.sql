@@ -27,6 +27,9 @@ alter table public.profiles add column if not exists journal_options jsonb;
 -- P/L calendar log modal: which R buttons to show (JSON array of numbers, e.g. [-2,-1,0,1,2]).
 alter table public.profiles add column if not exists log_r_options jsonb;
 
+-- Calendar: selected instrument + strategy (so phone and desktop show the same P/L view).
+alter table public.profiles add column if not exists calendar_preferences jsonb;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "Profiles are readable by everyone" on public.profiles;

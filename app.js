@@ -12,7 +12,8 @@
  *
  * localStorage = temporary cache ONLY — never authoritative. It may hydrate the
  * UI before a network round-trip, or hold prefs (theme, journal vocabulary,
- * log R button list, etc.), but must not silently become a second master copy.
+ * log R button list, calendar instrument/strategy selection mirrored in profile, etc.), but must not
+ * silently become a second master copy.
  * If signed in, reconcile from Supabase; do not treat cache misses/wins as competing truth.
  * ---------------------------------------------------------------------------
  */
@@ -248,6 +249,7 @@ function deleteStrategy(id) {
   renderDailyLogScreen();
   if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
   if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+  scheduleProfilePreferencesSync();
 }
 
 let strategies = loadStrategies();
@@ -632,6 +634,29 @@ function saveSelectedInstrument(instrument) {
 }
 
 let selectedInstrument = loadSelectedInstrument();
+
+/** Synced to profiles.calendar_preferences when signed in — keeps phone + desktop on the same P/L view. */
+function buildCalendarPreferencesPayload() {
+  return { instrument: selectedInstrument, strategyId: selectedStrategyId };
+}
+
+/**
+ * When signed in, profile.calendar_preferences is SSOT for instrument + strategy (after strategies list is loaded).
+ * @returns {{ instrument: string, strategyId: string } | null}
+ */
+function applyCalendarPreferencesFromProfile(profile, strategiesList) {
+  const p = profile?.calendar_preferences;
+  if (!p || typeof p !== 'object') return null;
+  let inst = null;
+  let sid = null;
+  if (typeof p.instrument === 'string' && INSTRUMENTS.includes(p.instrument)) inst = p.instrument;
+  if (typeof p.strategyId === 'string' && strategiesList.some((s) => s.id === p.strategyId)) sid = p.strategyId;
+  if (inst == null && sid == null) return null;
+  return {
+    instrument: inst != null ? inst : selectedInstrument,
+    strategyId: sid != null ? sid : selectedStrategyId
+  };
+}
 
 /** Persist all in-memory calendar/auth prefs to localStorage (e.g. when offline user taps Save locally). */
 function flushAllLocalDataToStorage() {
@@ -1310,7 +1335,8 @@ async function syncProfilePreferencesToSupabase() {
     avatar_url: profile.avatar_url ?? null,
     default_strategy_name: profile.default_strategy_name ?? null,
     journal_options: opts,
-    log_r_options: logR
+    log_r_options: logR,
+    calendar_preferences: buildCalendarPreferencesPayload()
   });
   if (error) console.warn('[Tagverse] profile preferences sync failed', error.message || error);
 }
@@ -2482,7 +2508,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const lr = logROptionsFromRemoteProfileOnly(currentProfile.log_r_options);
         if (lr) saveLogROptions(lr, { skipSync: true });
       }
-      void syncProfilePreferencesToSupabase();
 
       const localStrategies = loadStrategies();
       const localDefault = localStrategies.find((s) => s.id === STRATEGY_DEFAULT_ID);
@@ -2533,6 +2558,18 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedStrategyId = loadSelectedStrategyId();
     if (!strategies.some((s) => s.id === selectedStrategyId)) selectedStrategyId = strategies[0]?.id || STRATEGY_DEFAULT_ID;
     saveSelectedStrategyId(selectedStrategyId);
+    if (currentUser && currentProfile) {
+      const cal = applyCalendarPreferencesFromProfile(currentProfile, strategies);
+      if (cal) {
+        selectedInstrument = cal.instrument;
+        selectedStrategyId = cal.strategyId;
+        saveSelectedInstrument(selectedInstrument);
+        saveSelectedStrategyId(selectedStrategyId);
+      }
+    }
+    if (currentUser) {
+      scheduleProfilePreferencesSync();
+    }
     updateAuthUI();
     hydrateProfileSettings();
     if (typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
@@ -2603,7 +2640,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.visibilityState === 'visible') refreshOfflineBanner();
     if (document.visibilityState !== 'visible' || !currentUser) return;
     const now = Date.now();
-    if (now - lastCloudRefreshAt < 4000) return;
+    if (now - lastCloudRefreshAt < 500) return;
     lastCloudRefreshAt = now;
     applyAuthState();
   });
@@ -2811,6 +2848,7 @@ document.addEventListener('DOMContentLoaded', () => {
           renderDailyLogScreen();
           if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
           if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+          scheduleProfilePreferencesSync();
         });
         wrap.appendChild(btn);
 
@@ -2872,6 +2910,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
     if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+    scheduleProfilePreferencesSync();
   });
 
   document.getElementById('deleteStrategyModalBackdrop')?.addEventListener('click', closeDeleteStrategyModal);
@@ -2908,6 +2947,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
     if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+    scheduleProfilePreferencesSync();
   });
 
   const loginButton = document.getElementById('loginButton');
@@ -3131,6 +3171,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       profilePayload.journal_options = loadJournalOptions();
       profilePayload.log_r_options = loadLogROptions();
+      profilePayload.calendar_preferences = buildCalendarPreferencesPayload();
       const { error } = await upsertProfile(currentUser.id, profilePayload);
       settingsSaveProfileBtn.disabled = false;
       if (error) {
@@ -3170,7 +3211,8 @@ document.addEventListener('DOMContentLoaded', () => {
         avatar_url: profile.avatar_url ?? null,
         default_strategy_name: profile.default_strategy_name ?? null,
         journal_options: loadJournalOptions(),
-        log_r_options: loadLogROptions()
+        log_r_options: loadLogROptions(),
+        calendar_preferences: buildCalendarPreferencesPayload()
       });
       settingsSaveLogROptionsBtn.disabled = false;
       if (error) {
@@ -3311,6 +3353,7 @@ document.addEventListener('DOMContentLoaded', () => {
       saveSelectedInstrument(selectedInstrument);
       renderCalendar();
       if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+      scheduleProfilePreferencesSync();
     });
   });
 
@@ -3712,6 +3755,27 @@ document.addEventListener('DOMContentLoaded', () => {
       input.select();
       document.execCommand('copy');
     }
+  });
+
+  document.getElementById('settingsSyncCalendarBtn')?.addEventListener('click', async () => {
+    const msg = document.getElementById('settingsSyncCalendarMessage');
+    const btn = document.getElementById('settingsSyncCalendarBtn');
+    if (!currentUser) {
+      if (msg) msg.textContent = 'Sign in first.';
+      return;
+    }
+    if (btn) btn.disabled = true;
+    if (msg) msg.textContent = 'Syncing…';
+    try {
+      await applyAuthState();
+      if (msg) msg.textContent = 'Calendar updated.';
+    } catch (_) {
+      if (msg) msg.textContent = 'Could not sync. Check connection.';
+    }
+    if (btn) btn.disabled = false;
+    window.setTimeout(() => {
+      if (msg) msg.textContent = '';
+    }, 3500);
   });
 
   const themeSelect = document.getElementById('settingsTheme');

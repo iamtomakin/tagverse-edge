@@ -1,0 +1,11 @@
+---
+description: Tagverse Edge is deployed on Vercel (Git push)
+alwaysApply: true
+---
+
+# Deployment (Vercel)
+
+- This project is **hosted on Vercel** (connected to the Git repo).
+- **Deploy:** push to the branch Vercel watches (usually `main`) — Vercel builds and publishes automatically.
+- **Static output:** root `index.html`, `app.js`, `styles.css`, assets — no separate build step required unless the user adds one.
+- If deploy advice is needed, assume **Vercel dashboard + Git integration**, not FTP/cPanel unless stated otherwise.
