@@ -21,6 +21,9 @@ create table if not exists public.profiles (
 
 alter table public.profiles add column if not exists default_strategy_name text;
 
+-- Daily Log: categories, emotions, risk types + Notion-style color map (JSON). Synced when signed in.
+alter table public.profiles add column if not exists journal_options jsonb;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "Profiles are readable by everyone" on public.profiles;

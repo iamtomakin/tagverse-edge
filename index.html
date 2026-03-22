@@ -25,8 +25,8 @@
       <h1 class="app-logo">Tagverse Edge</h1>
       <nav class="main-nav" aria-label="Main">
         <button type="button" class="nav-tab active" data-screen="calendar" aria-current="page">Calendar</button>
+        <button type="button" class="nav-tab" data-screen="dailylog">Daily Log</button>
         <button type="button" class="nav-tab" data-screen="analytics">Analytics</button>
-        <button type="button" class="nav-tab" data-screen="community">Community</button>
         <button type="button" class="nav-tab" data-screen="settings">Settings</button>
       </nav>
       <div class="auth-bar" aria-live="polite">
@@ -172,6 +172,180 @@
       </div>
     </div>
 
+    <!-- Daily Log: Notion-style Overview + Calendar -->
+    <main id="screen-dailylog" class="screen daily-log-screen" role="main" hidden>
+      <div class="daily-log-page">
+        <header class="daily-log-header">
+          <div class="daily-log-title-row">
+            <span class="daily-log-icon" aria-hidden="true">📁</span>
+            <div>
+              <h1 class="daily-log-title">Daily Log</h1>
+              <p class="daily-log-subtitle">Pain + Reflection = Progress. — Ray Dalio</p>
+            </div>
+          </div>
+          <div class="daily-log-toolbar">
+            <nav class="journal-view-tabs" role="tablist" aria-label="Daily log view">
+              <button type="button" class="journal-view-tab active" role="tab" aria-selected="true" data-journal-view="overview" id="journalTabOverview">Overview</button>
+              <button type="button" class="journal-view-tab" role="tab" aria-selected="false" data-journal-view="calendar" id="journalTabCalendar">Calendar</button>
+            </nav>
+            <button type="button" class="journal-new-btn" id="journalNewEntryBtn">+ New</button>
+          </div>
+        </header>
+
+        <section id="journalPanelOverview" class="journal-panel is-active" role="tabpanel" aria-labelledby="journalTabOverview">
+          <div id="journalGalleryGrid" class="journal-gallery" aria-label="Journal entries"></div>
+          <p id="journalEmptyOverview" class="journal-empty" hidden>No journal entries yet. Click <strong>New</strong> to add one.</p>
+        </section>
+
+        <section id="journalPanelCalendar" class="journal-panel" role="tabpanel" aria-labelledby="journalTabCalendar" hidden>
+          <div class="journal-cal-nav">
+            <button type="button" class="journal-cal-nav-btn" id="journalPrevMonth" aria-label="Previous month">&lt;</button>
+            <span class="journal-cal-month" id="journalCalMonthLabel">March 2026</span>
+            <button type="button" class="journal-cal-nav-btn" id="journalNextMonth" aria-label="Next month">&gt;</button>
+            <button type="button" class="journal-cal-today-btn" id="journalCalToday">Today</button>
+          </div>
+          <div class="journal-cal-grid-wrap">
+            <div class="journal-cal-grid" id="journalCalGrid" aria-label="Journal calendar"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Journal entry: Notion-style daily trade log template -->
+    <div id="journalEntryModal" class="log-modal journal-entry-modal" role="dialog" aria-label="Daily trade log" hidden>
+      <div class="log-modal-backdrop" id="journalEntryModalBackdrop"></div>
+      <div class="log-modal-content journal-entry-sheet">
+        <div class="journal-entry-toolbar">
+          <button type="button" class="journal-entry-back" id="journalEntryCloseHeader" aria-label="Close">← Close</button>
+        </div>
+
+        <label class="journal-entry-title-label" for="journalEntryTitle">Title</label>
+        <input type="text" id="journalEntryTitle" class="journal-entry-title-input" maxlength="200" placeholder="Daily Trade Log" />
+
+        <div class="journal-properties" role="list">
+          <div class="journal-prop-row">
+            <span class="journal-prop-icon" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+            </span>
+            <span class="journal-prop-label">Created</span>
+            <input type="date" id="journalEntryDate" class="journal-entry-date-input" />
+          </div>
+          <div class="journal-prop-row">
+            <span class="journal-prop-icon" aria-hidden="true" title="Strategy">
+              <!-- Compass: direction & planning -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2" />
+                <polygon fill="currentColor" points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+              </svg>
+            </span>
+            <span class="journal-prop-label">Strategy</span>
+            <select id="journalEntryStrategySelect" class="journal-entry-strategy-select" aria-label="Strategy for this log entry"></select>
+          </div>
+          <div class="journal-prop-row journal-prop-row-stack">
+            <span class="journal-prop-icon" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </span>
+            <span class="journal-prop-label">Categories</span>
+            <div class="journal-emotions-wrap">
+              <div id="journalCategoryChips" class="journal-emotion-chips" aria-label="Selected categories"></div>
+              <button type="button" class="journal-prop-trigger journal-prop-trigger-inline" id="journalBtnPickCategory" aria-haspopup="listbox" aria-expanded="false">+ Add category</button>
+            </div>
+          </div>
+          <div class="journal-prop-row journal-prop-row-stack">
+            <span class="journal-prop-icon" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            </span>
+            <span class="journal-prop-label">Emotions</span>
+            <div class="journal-emotions-wrap">
+              <div id="journalEmotionChips" class="journal-emotion-chips"></div>
+              <button type="button" class="journal-prop-trigger journal-prop-trigger-inline" id="journalBtnPickEmotions" aria-haspopup="listbox" aria-expanded="false">+ Add emotion</button>
+            </div>
+          </div>
+          <div class="journal-prop-row journal-prop-row-interactive">
+            <span class="journal-prop-icon" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+            </span>
+            <span class="journal-prop-label">Risk type</span>
+            <button type="button" class="journal-prop-trigger" id="journalBtnPickRisk" aria-haspopup="listbox" aria-expanded="false">
+              <span id="journalRiskDisplay" class="journal-prop-placeholder">Select…</span>
+            </button>
+          </div>
+        </div>
+
+        <input type="hidden" id="journalEntryRisk" value="" />
+        <input type="hidden" id="journalEntryEditId" value="" />
+
+        <div class="journal-body-section">
+          <h3 class="journal-section-title">Setup before execution</h3>
+          <textarea id="journalSetupBefore" class="journal-section-textarea" rows="4" placeholder="Context, plan, levels…"></textarea>
+          <div class="journal-image-block">
+            <input type="file" id="journalImageBeforeInput" accept="image/*" hidden />
+            <button type="button" class="journal-image-add" id="journalImageBeforeBtn">
+              <span class="journal-image-add-icon" aria-hidden="true">🖼</span>
+              Add an image
+            </button>
+            <div id="journalImageBeforePreview" class="journal-image-preview" hidden>
+              <img id="journalImageBeforeImg" alt="" />
+              <button type="button" class="journal-image-remove" id="journalImageBeforeRemove" aria-label="Remove image">×</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="journal-body-section">
+          <h3 class="journal-section-title">Setup after execution</h3>
+          <textarea id="journalSetupAfter" class="journal-section-textarea" rows="4" placeholder="Review, what happened…"></textarea>
+          <div class="journal-image-block">
+            <input type="file" id="journalImageAfterInput" accept="image/*" hidden />
+            <button type="button" class="journal-image-add" id="journalImageAfterBtn">
+              <span class="journal-image-add-icon" aria-hidden="true">🖼</span>
+              Add an image
+            </button>
+            <div id="journalImageAfterPreview" class="journal-image-preview" hidden>
+              <img id="journalImageAfterImg" alt="" />
+              <button type="button" class="journal-image-remove" id="journalImageAfterRemove" aria-label="Remove image">×</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="journal-body-section">
+          <h3 class="journal-section-title">Additional notes</h3>
+          <textarea id="journalEntryNote" class="journal-section-textarea" rows="3" placeholder="Anything else…"></textarea>
+        </div>
+
+        <p id="journalEntryModalError" class="journal-modal-error" hidden></p>
+
+        <div class="journal-entry-actions">
+          <button type="button" class="log-modal-clear" id="journalEntryDeleteBtn" hidden>Delete</button>
+          <button type="button" class="log-modal-cancel" id="journalEntryCancelBtn">Cancel</button>
+          <button type="button" class="log-modal-cancel journal-save-btn" id="journalEntrySaveBtn">Save</button>
+        </div>
+      </div>
+
+      <!-- Popovers outside .journal-entry-sheet so overflow:auto does not clip fixed UI / hit-testing -->
+      <div id="journalPickerPop" class="journal-picker-pop" hidden>
+        <p class="journal-picker-hint">Select an option or create one</p>
+        <input type="search" id="journalPickerSearch" class="journal-picker-search" placeholder="Search for an option…" autocomplete="off" />
+        <ul id="journalPickerList" class="journal-picker-ul"></ul>
+        <button type="button" id="journalPickerCreateBtn" class="journal-picker-create" hidden>Create</button>
+      </div>
+
+      <!-- Notion-style: rename, delete, color for Category / Emotions / Risk -->
+      <div id="journalOptionEditPop" class="journal-option-edit-pop" hidden role="dialog" aria-label="Edit option">
+        <div class="journal-option-edit-field">
+          <input type="text" id="journalOptionEditInput" class="journal-option-edit-input" autocomplete="off" maxlength="120" />
+          <button type="button" class="journal-option-edit-info" id="journalOptionEditInfoBtn" title="Tag name" aria-label="Info">ⓘ</button>
+        </div>
+        <button type="button" class="journal-option-edit-delete" id="journalOptionEditDeleteBtn">
+          <span class="journal-option-edit-delete-ic" aria-hidden="true">🗑</span>
+          Delete
+        </button>
+        <div class="journal-option-edit-colors">
+          <div class="journal-option-edit-colors-label">Colors</div>
+          <ul id="journalOptionEditColorList" class="journal-option-edit-color-list" role="listbox" aria-label="Colors"></ul>
+        </div>
+      </div>
+    </div>
+
     <!-- Screen 3: Analytics -->
     <main id="screen-analytics" class="screen" role="main" hidden>
       <div class="analytics-container">
@@ -242,88 +416,7 @@
       </div>
     </main>
 
-    <!-- Screen 4: Community -->
-    <main id="screen-community" class="screen" role="main" hidden>
-      <div class="community-layout">
-        <aside class="community-sidebar" aria-label="Community navigation">
-          <div class="community-sidebar-section">
-            <h2 class="community-sidebar-title">Community</h2>
-            <nav class="community-nav">
-              <button type="button" class="community-nav-item community-nav-item-active" data-community-view="home">Home</button>
-              <button type="button" class="community-nav-item" data-community-view="mine">My posts</button>
-              <button type="button" class="community-nav-item" data-community-view="search">Search</button>
-            </nav>
-          </div>
-          <div class="community-sidebar-section">
-            <h3 class="community-sidebar-subtitle">Topics</h3>
-            <nav class="community-nav community-nav-topics">
-              <button type="button" class="community-nav-item" data-community-topic="general">General</button>
-              <button type="button" class="community-nav-item" data-community-topic="setups">Setups</button>
-              <button type="button" class="community-nav-item" data-community-topic="all">All topics</button>
-            </nav>
-          </div>
-        </aside>
-
-        <section class="community-main" aria-label="Community feed">
-          <header class="community-header">
-            <div>
-              <h2 class="community-title">Home</h2>
-              <p class="community-subtitle">See how other traders are using their edge.</p>
-            </div>
-            <button type="button" class="community-new-post-btn" id="communityNewPostBtn">New post</button>
-          </header>
-          <p id="communityPostMessage" class="community-post-message" role="status" aria-live="polite"></p>
-
-          <section class="community-feed-controls" aria-label="Feed filters">
-            <label class="community-sort-label">
-              Sort by
-              <select id="communitySortSelect" class="community-sort-select">
-                <option value="newest">Newest</option>
-                <option value="most_commented">Most commented</option>
-              </select>
-            </label>
-          </section>
-
-          <section class="community-feed" id="communityFeed" aria-label="Community posts">
-            <!-- Placeholder example card; will be replaced by dynamic content later -->
-            <article class="community-post-card">
-              <header class="community-post-header">
-                <div class="community-post-author">
-                  <div class="community-avatar">TA</div>
-                  <div class="community-post-meta">
-                    <div class="community-post-author-line">
-                      <span class="community-username">@drtom_akins</span>
-                      <span class="community-badge">Creator</span>
-                      <span class="community-tag">General</span>
-                    </div>
-                    <span class="community-post-time">3m ago</span>
-                  </div>
-                </div>
-              </header>
-              <div class="community-post-body">
-                <h3 class="community-post-title">March: 2-trade rule run</h3>
-                <p class="community-post-description">Focused on two trades per day and cutting losers fast.</p>
-              </div>
-              <div class="community-post-stats">
-                <span>+14R this month</span>
-                <span>100% win rate</span>
-                <span>8 green / 0 red days</span>
-              </div>
-              <footer class="community-post-footer">
-                <button type="button" class="community-post-link">View snapshot</button>
-                <div class="community-post-footer-meta">
-                  <span>0 comments</span>
-                </div>
-              </footer>
-            </article>
-
-            <p class="community-empty-note">When traders share their calendars, they will show up here.</p>
-          </section>
-        </section>
-      </div>
-    </main>
-
-    <!-- Screen 5: Settings -->
+    <!-- Screen 4: Settings -->
     <main id="screen-settings" class="screen screen-settings" role="main" hidden>
       <div class="settings-layout">
         <header class="settings-page-head">
@@ -358,7 +451,7 @@
           <section id="settingsPanelProfile" class="settings-panel" role="tabpanel" aria-labelledby="settingsTabProfile" data-settings-panel="profile" hidden>
             <article class="settings-card">
               <h2 class="settings-card-title">Profile information</h2>
-              <p class="settings-card-lead">Your handle is shown in the header and on community posts.</p>
+              <p class="settings-card-lead">Your handle is shown in the header.</p>
               <div class="settings-profile-row">
                 <div class="settings-avatar" id="settingsProfileAvatar" aria-hidden="true">
                   <span class="settings-avatar-initials" id="settingsAvatarInitials">?</span>

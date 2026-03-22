@@ -2,7 +2,7 @@
  * Tagverse Edge — Calendar, declarations, log modal, analytics, share, settings
  */
 
-const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy' };
+const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy', journalEntries: 'tagverse_journal_entries', journalOptions: 'tagverse_journal_options' };
 
 const STRATEGY_DEFAULT_ID = 'default';
 
@@ -208,6 +208,7 @@ function renameStrategy(id, newName) {
   }
   renderStrategyPills();
   renderCalendar();
+  renderDailyLogScreen();
   if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
   if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
 }
@@ -229,6 +230,7 @@ function deleteStrategy(id) {
   strategies = loadStrategies();
   renderStrategyPills();
   renderCalendar();
+  renderDailyLogScreen();
   if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
   if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
 }
@@ -580,6 +582,20 @@ let declarations = loadDeclarations();
 let currentDate = new Date();
 let selectedDate = new Date();
 let logModalTargetDate = null;
+/** Month shown on Daily Log → Calendar (journal), independent of P/L calendar. */
+let journalLogMonth = new Date();
+let journalEntryEditId = null;
+let journalPickerKind = null;
+let journalPickerAnchorEl = null;
+let journalDraftEmotions = [];
+let journalDraftCategories = [];
+let journalOptionsSyncTimer = null;
+let journalImageDraft = { before: null, after: null };
+/** Notion-style option editor (rename / color / delete) */
+let journalOptionEditKind = null;
+let journalOptionEditLabel = null;
+let journalOptionEditAnchorEl = null;
+const JOURNAL_IMAGE_MAX_BYTES = 2.5 * 1024 * 1024;
 
 function loadSelectedInstrument() {
   try {
@@ -817,7 +833,7 @@ function computeDisciplineScore(instrument) {
   return Math.round((compliant / declared) * 100);
 }
 
-/** Build snapshot token + payload for share/community; updates localStorage tokens and lastShareToken / lastSharePayload. */
+/** Build snapshot token + payload for share; updates localStorage tokens and lastShareToken / lastSharePayload. */
 function buildSnapshotTokenForPeriod(periodVal) {
   const key = periodVal === 'week' || periodVal === 'today' ? periodVal : 'month';
   const results = getResultsInRange(key);
@@ -920,6 +936,1148 @@ function syncCalendarUserBio() {
   textEl.textContent = bio;
 }
 
+/* ---------- Daily Log (Notion-style journal): localStorage ---------- */
+
+function loadJournalEntries() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.journalEntries);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveJournalEntries(entries) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.journalEntries, JSON.stringify(entries));
+  } catch (e) {
+    console.error('[Tagverse] save journal entries failed', e);
+  }
+}
+
+function getJournalEntriesForStrategy(strategyId) {
+  return loadJournalEntries().filter((e) => e && e.strategyId === strategyId);
+}
+
+const JOURNAL_DEFAULT_CATEGORIES = ['Eval', 'Funded', 'Live'];
+
+/** Default risk levels (single-select). */
+const JOURNAL_DEFAULT_RISK_TYPES = ['Low', 'Medium', 'High'];
+
+/**
+ * Canonical emotions — order & colors match the Notion-style picker reference.
+ * Users may still add custom emotions (grey “custom” pill).
+ */
+const JOURNAL_CANONICAL_EMOTIONS = [
+  'anxious',
+  'content',
+  'disappointed',
+  'furious',
+  'guilty',
+  'low',
+  'neutral',
+  'nervous',
+  'overwhelmed',
+  'proud',
+  'positive'
+];
+
+const _journalCanonEmoLower = new Set(JOURNAL_CANONICAL_EMOTIONS.map((s) => s.toLowerCase()));
+
+/** Notion database color names (fixed set). */
+const JOURNAL_NOTION_PALETTE = ['default', 'gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red'];
+
+const CANON_EMOTION_PALETTE = {
+  anxious: 'red',
+  content: 'blue',
+  disappointed: 'purple',
+  furious: 'red',
+  guilty: 'gray',
+  low: 'purple',
+  neutral: 'gray',
+  nervous: 'purple',
+  overwhelmed: 'brown',
+  proud: 'blue',
+  positive: 'green'
+};
+
+const DEFAULT_RISK_PALETTE = { low: 'green', medium: 'orange', high: 'red' };
+const DEFAULT_CATEGORY_PALETTE = { eval: 'blue', funded: 'green', live: 'orange' };
+
+function dedupeSorted(arr) {
+  return [...new Set((Array.isArray(arr) ? arr : []).map(String))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+function getDefaultColorKeyForOption(kind, label) {
+  const l = String(label || '')
+    .trim()
+    .toLowerCase();
+  if (kind === 'emotion') return CANON_EMOTION_PALETTE[l] || 'default';
+  if (kind === 'risk') return DEFAULT_RISK_PALETTE[l] || 'default';
+  if (kind === 'category') return DEFAULT_CATEGORY_PALETTE[l] || 'default';
+  return 'default';
+}
+
+function normalizeColorKey(key) {
+  const k = String(key || 'default').toLowerCase();
+  return JOURNAL_NOTION_PALETTE.includes(k) ? k : 'default';
+}
+
+function seedColorMaps(opts) {
+  const ec = opts.emotionColors && typeof opts.emotionColors === 'object' ? { ...opts.emotionColors } : {};
+  const rc = opts.riskColors && typeof opts.riskColors === 'object' ? { ...opts.riskColors } : {};
+  const cc = opts.categoryColors && typeof opts.categoryColors === 'object' ? { ...opts.categoryColors } : {};
+  (opts.emotions || []).forEach((e) => {
+    if (ec[e] == null) ec[e] = getDefaultColorKeyForOption('emotion', e);
+  });
+  (opts.riskTypes || []).forEach((r) => {
+    if (rc[r] == null) rc[r] = getDefaultColorKeyForOption('risk', r);
+  });
+  (opts.categories || []).forEach((c) => {
+    if (cc[c] == null) cc[c] = getDefaultColorKeyForOption('category', c);
+  });
+  return { emotionColors: ec, riskColors: rc, categoryColors: cc };
+}
+
+function loadJournalOptions() {
+  const emptyBase = () => {
+    const base = {
+      categories: [...JOURNAL_DEFAULT_CATEGORIES],
+      emotions: [...JOURNAL_CANONICAL_EMOTIONS],
+      riskTypes: [...JOURNAL_DEFAULT_RISK_TYPES],
+      emotionColors: {},
+      riskColors: {},
+      categoryColors: {}
+    };
+    const seeded = seedColorMaps(base);
+    base.emotionColors = seeded.emotionColors;
+    base.riskColors = seeded.riskColors;
+    base.categoryColors = seeded.categoryColors;
+    return base;
+  };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.journalOptions);
+    if (!raw) return emptyBase();
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== 'object') return emptyBase();
+    const categories = Array.isArray(o.categories) ? dedupeSorted(o.categories) : [...JOURNAL_DEFAULT_CATEGORIES];
+    const emotions = Array.isArray(o.emotions) ? dedupeSorted(o.emotions) : [...JOURNAL_CANONICAL_EMOTIONS];
+    const riskTypes = Array.isArray(o.riskTypes) ? dedupeSorted(o.riskTypes) : [...JOURNAL_DEFAULT_RISK_TYPES];
+    const merged = {
+      categories,
+      emotions,
+      riskTypes,
+      emotionColors: o.emotionColors && typeof o.emotionColors === 'object' ? o.emotionColors : {},
+      riskColors: o.riskColors && typeof o.riskColors === 'object' ? o.riskColors : {},
+      categoryColors: o.categoryColors && typeof o.categoryColors === 'object' ? o.categoryColors : {}
+    };
+    const seeded = seedColorMaps(merged);
+    merged.emotionColors = seeded.emotionColors;
+    merged.riskColors = seeded.riskColors;
+    merged.categoryColors = seeded.categoryColors;
+    return merged;
+  } catch (_) {
+    return emptyBase();
+  }
+}
+
+function saveJournalOptions(opts, flags) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.journalOptions, JSON.stringify(opts));
+  } catch (e) {
+    console.error('[Tagverse] save journal options failed', e);
+  }
+  if (!flags?.skipSync) {
+    scheduleJournalOptionsSyncToProfile();
+  }
+}
+
+/** Merge local journal vocabulary with remote profile (union lists; remote color keys override). */
+function mergeJournalOptionsObjects(local, remote) {
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)) return local;
+  const l = local && typeof local === 'object' ? local : loadJournalOptions();
+  const rc = Array.isArray(remote.categories) ? remote.categories : [];
+  const re = Array.isArray(remote.emotions) ? remote.emotions : [];
+  const rr = Array.isArray(remote.riskTypes) ? remote.riskTypes : [];
+  return {
+    categories: dedupeSorted([...new Set([...(l.categories || []), ...rc])]),
+    emotions: dedupeSorted([...new Set([...(l.emotions || []), ...re])]),
+    riskTypes: dedupeSorted([...new Set([...(l.riskTypes || []), ...rr])]),
+    emotionColors: {
+      ...(l.emotionColors && typeof l.emotionColors === 'object' ? l.emotionColors : {}),
+      ...(remote.emotionColors && typeof remote.emotionColors === 'object' ? remote.emotionColors : {})
+    },
+    riskColors: {
+      ...(l.riskColors && typeof l.riskColors === 'object' ? l.riskColors : {}),
+      ...(remote.riskColors && typeof remote.riskColors === 'object' ? remote.riskColors : {})
+    },
+    categoryColors: {
+      ...(l.categoryColors && typeof l.categoryColors === 'object' ? l.categoryColors : {}),
+      ...(remote.categoryColors && typeof remote.categoryColors === 'object' ? remote.categoryColors : {})
+    }
+  };
+}
+
+function scheduleJournalOptionsSyncToProfile() {
+  if (!currentUser || !isSupabaseEnabled()) return;
+  clearTimeout(journalOptionsSyncTimer);
+  journalOptionsSyncTimer = setTimeout(() => {
+    journalOptionsSyncTimer = null;
+    void syncJournalOptionsToProfile();
+  }, 500);
+}
+
+async function syncJournalOptionsToProfile() {
+  if (!currentUser || !isSupabaseEnabled()) return;
+  let profile = currentProfile;
+  if (!profile?.username) {
+    profile = await fetchCurrentProfile(currentUser.id);
+    if (profile) currentProfile = profile;
+  }
+  if (!profile?.username) return;
+  const opts = loadJournalOptions();
+  const { error } = await upsertProfile(currentUser.id, {
+    username: profile.username,
+    bio: profile.bio ?? null,
+    avatar_url: profile.avatar_url ?? null,
+    default_strategy_name: profile.default_strategy_name ?? null,
+    journal_options: opts
+  });
+  if (error) console.warn('[Tagverse] journal_options sync failed', error.message || error);
+}
+
+/** Remember a user-typed value in the vocabulary for pickers. */
+function ensureJournalOption(kind, value) {
+  const v = String(value || '').trim();
+  if (!v) return;
+  const opts = loadJournalOptions();
+  if (kind === 'category') {
+    if (opts.categories.some((c) => c.toLowerCase() === v.toLowerCase())) return;
+    opts.categories = dedupeSorted([...opts.categories, v]);
+    if (!opts.categoryColors) opts.categoryColors = {};
+    if (opts.categoryColors[v] == null) opts.categoryColors[v] = getDefaultColorKeyForOption('category', v);
+  } else if (kind === 'emotion') {
+    if (opts.emotions.some((e) => e.toLowerCase() === v.toLowerCase())) return;
+    opts.emotions = dedupeSorted([...opts.emotions, v]);
+    if (!opts.emotionColors) opts.emotionColors = {};
+    if (opts.emotionColors[v] == null) opts.emotionColors[v] = getDefaultColorKeyForOption('emotion', v);
+  } else if (kind === 'risk') {
+    if (opts.riskTypes.some((r) => r.toLowerCase() === v.toLowerCase())) return;
+    opts.riskTypes = dedupeSorted([...opts.riskTypes, v]);
+    if (!opts.riskColors) opts.riskColors = {};
+    if (opts.riskColors[v] == null) opts.riskColors[v] = getDefaultColorKeyForOption('risk', v);
+  } else return;
+  saveJournalOptions(opts);
+}
+
+function renameJournalOptionInStorage(kind, oldLabel, newLabel) {
+  const o = String(oldLabel || '').trim();
+  const n = String(newLabel || '').trim();
+  if (!o || !n || o === n) return;
+  const opts = loadJournalOptions();
+  const relabel = (arr) => arr.map((x) => (x === o ? n : x));
+  if (kind === 'emotion') {
+    opts.emotions = dedupeSorted(relabel(opts.emotions || []));
+    if (!opts.emotionColors) opts.emotionColors = {};
+    const c = opts.emotionColors[o] || getDefaultColorKeyForOption('emotion', n);
+    delete opts.emotionColors[o];
+    opts.emotionColors[n] = normalizeColorKey(c);
+    journalDraftEmotions = journalDraftEmotions.map((x) => (x === o ? n : x));
+  } else if (kind === 'risk') {
+    opts.riskTypes = dedupeSorted(relabel(opts.riskTypes || []));
+    if (!opts.riskColors) opts.riskColors = {};
+    const c = opts.riskColors[o] || getDefaultColorKeyForOption('risk', n);
+    delete opts.riskColors[o];
+    opts.riskColors[n] = normalizeColorKey(c);
+    const h = document.getElementById('journalEntryRisk');
+    if (h && h.value === o) {
+      h.value = n;
+      applyJournalRisk(n);
+    }
+  } else if (kind === 'category') {
+    opts.categories = dedupeSorted(relabel(opts.categories || []));
+    if (!opts.categoryColors) opts.categoryColors = {};
+    const c = opts.categoryColors[o] || getDefaultColorKeyForOption('category', n);
+    delete opts.categoryColors[o];
+    opts.categoryColors[n] = normalizeColorKey(c);
+    if (journalDraftCategories.some((x) => x.toLowerCase() === o.toLowerCase())) {
+      journalDraftCategories = journalDraftCategories.map((x) => (x.toLowerCase() === o.toLowerCase() ? n : x));
+      renderJournalCategoryChips();
+    }
+  } else return;
+  saveJournalOptions(opts);
+  const entries = loadJournalEntries();
+  let changed = false;
+  entries.forEach((e) => {
+    if (kind === 'category') {
+      const cats = normalizeJournalCategories(e);
+      if (cats.includes(o)) {
+        e.categories = dedupeSorted(cats.map((x) => (x === o ? n : x)));
+        delete e.category;
+        changed = true;
+      }
+    }
+    if (kind === 'risk' && e.riskType === o) {
+      e.riskType = n;
+      changed = true;
+    }
+    if (kind === 'emotion' && Array.isArray(e.emotions) && e.emotions.includes(o)) {
+      e.emotions = [...new Set(e.emotions.map((x) => (x === o ? n : x)))];
+      changed = true;
+    }
+  });
+  if (changed) saveJournalEntries(entries);
+  journalOptionEditLabel = n;
+  const inp = document.getElementById('journalOptionEditInput');
+  if (inp) inp.value = n;
+}
+
+function deleteJournalOptionFromStorage(kind, label) {
+  const v = String(label || '').trim();
+  if (!v) return;
+  const opts = loadJournalOptions();
+  if (kind === 'emotion') {
+    opts.emotions = (opts.emotions || []).filter((x) => x !== v);
+    if (opts.emotionColors) delete opts.emotionColors[v];
+    journalDraftEmotions = journalDraftEmotions.filter((x) => x !== v);
+  } else if (kind === 'risk') {
+    opts.riskTypes = (opts.riskTypes || []).filter((x) => x !== v);
+    if (opts.riskColors) delete opts.riskColors[v];
+    const h = document.getElementById('journalEntryRisk');
+    if (h && h.value === v) applyJournalRisk('');
+  } else if (kind === 'category') {
+    opts.categories = (opts.categories || []).filter((x) => x !== v);
+    if (opts.categoryColors) delete opts.categoryColors[v];
+    journalDraftCategories = journalDraftCategories.filter((x) => x.toLowerCase() !== v.toLowerCase());
+    renderJournalCategoryChips();
+  } else return;
+  saveJournalOptions(opts);
+  const entries = loadJournalEntries();
+  let changed = false;
+  entries.forEach((e) => {
+    if (kind === 'category') {
+      const cats = normalizeJournalCategories(e);
+      if (cats.includes(v)) {
+        e.categories = cats.filter((x) => x !== v);
+        if (e.categories.length === 0) delete e.categories;
+        delete e.category;
+        changed = true;
+      }
+    }
+    if (kind === 'risk' && e.riskType === v) {
+      e.riskType = '';
+      changed = true;
+    }
+    if (kind === 'emotion' && Array.isArray(e.emotions)) {
+      const next = e.emotions.filter((x) => x !== v);
+      if (next.length !== e.emotions.length) {
+        e.emotions = next;
+        changed = true;
+      }
+    }
+  });
+  if (changed) saveJournalEntries(entries);
+}
+
+function setJournalOptionColor(kind, label, colorKey) {
+  const k = normalizeColorKey(colorKey);
+  const opts = loadJournalOptions();
+  if (kind === 'emotion') {
+    if (!opts.emotionColors) opts.emotionColors = {};
+    opts.emotionColors[label] = k;
+  } else if (kind === 'risk') {
+    if (!opts.riskColors) opts.riskColors = {};
+    opts.riskColors[label] = k;
+  } else if (kind === 'category') {
+    if (!opts.categoryColors) opts.categoryColors = {};
+    opts.categoryColors[label] = k;
+  } else return;
+  saveJournalOptions(opts);
+}
+
+function journalRefreshPillDisplaysInModal() {
+  const risk = document.getElementById('journalEntryRisk')?.value || '';
+  renderJournalCategoryChips();
+  const rd = document.getElementById('journalRiskDisplay');
+  if (rd) {
+    if (!risk) {
+      rd.textContent = 'Select…';
+      rd.className = 'journal-prop-placeholder journal-prop-value-pill';
+    } else {
+      rd.textContent = risk;
+      rd.className = journalOptionPillClass('risk', risk) + ' journal-prop-value-pill';
+    }
+  }
+}
+
+function normalizeJournalCategories(e) {
+  if (!e || typeof e !== 'object') return [];
+  if (Array.isArray(e.categories)) {
+    return dedupeSorted(e.categories.map((x) => String(x).trim()).filter(Boolean));
+  }
+  const c = e.category != null ? String(e.category).trim() : '';
+  return c ? [c] : [];
+}
+
+function normalizeJournalEntry(e) {
+  if (!e || typeof e !== 'object') return e;
+  const tags = Array.isArray(e.tags) ? e.tags : [];
+  const emotions = Array.isArray(e.emotions) ? e.emotions : [];
+  const categories = normalizeJournalCategories(e);
+  return {
+    ...e,
+    title: e.title != null && String(e.title).trim() ? String(e.title).trim() : 'Daily Trade Log',
+    categories,
+    category: categories[0] != null ? String(categories[0]) : '',
+    emotions,
+    riskType: e.riskType != null ? String(e.riskType) : '',
+    setupBefore: e.setupBefore != null ? String(e.setupBefore) : '',
+    setupAfter: e.setupAfter != null ? String(e.setupAfter) : '',
+    imageBefore: e.imageBefore != null ? e.imageBefore : null,
+    imageAfter: e.imageAfter != null ? e.imageAfter : null,
+    note: e.note != null ? String(e.note) : '',
+    tags
+  };
+}
+
+/** Pills for gallery: category, emotions, risk, legacy tags */
+function journalEntryDisplayPills(e) {
+  const n = normalizeJournalEntry({ ...e });
+  const out = [];
+  (n.categories || []).forEach((c) => out.push({ text: c, cls: journalOptionPillClass('category', c) }));
+  (n.emotions || []).forEach((t) => out.push({ text: t, cls: journalOptionPillClass('emotion', t) }));
+  if (n.riskType) out.push({ text: n.riskType, cls: journalOptionPillClass('risk', n.riskType) });
+  (n.tags || []).forEach((t) => out.push({ text: t, cls: 'journal-tag-pill ' + journalTagClass(t) }));
+  return out;
+}
+
+/** Notion palette — colors stored in journalOptions.*Colors or defaults. */
+function journalOptionPillClass(kind, label) {
+  if (!label) return 'journal-pill journal-palette-default';
+  const opts = loadJournalOptions();
+  let map = opts.emotionColors;
+  if (kind === 'risk') map = opts.riskColors;
+  if (kind === 'category') map = opts.categoryColors;
+  const colorKey = normalizeColorKey((map && map[label]) || getDefaultColorKeyForOption(kind, label));
+  return 'journal-pill journal-palette-' + colorKey;
+}
+
+function journalTagClass(tag) {
+  const t = String(tag).toLowerCase();
+  const palette = ['journal-tag-purple', 'journal-tag-grey', 'journal-tag-red', 'journal-tag-green', 'journal-tag-blue'];
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+
+function formatJournalDateDisplay(dateKey) {
+  if (!dateKey) return '';
+  const parts = dateKey.split('-').map(Number);
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return dateKey;
+  const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  return dt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function renderJournalOverview() {
+  const grid = document.getElementById('journalGalleryGrid');
+  const empty = document.getElementById('journalEmptyOverview');
+  if (!grid) return;
+  const entries = getJournalEntriesForStrategy(selectedStrategyId).sort((a, b) => {
+    const dk = (b.dateKey || '').localeCompare(a.dateKey || '');
+    if (dk !== 0) return dk;
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  });
+  grid.innerHTML = '';
+  if (empty) empty.hidden = entries.length > 0;
+  entries.forEach((e) => {
+    const n = normalizeJournalEntry({ ...e });
+    const card = document.createElement('article');
+    card.className = 'journal-card';
+    card.dataset.entryId = e.id;
+    const thumb = document.createElement('div');
+    thumb.className = 'journal-card-thumb';
+    if (n.imageBefore && String(n.imageBefore).startsWith('data:')) {
+      thumb.classList.add('journal-card-thumb-has-image');
+      const img = document.createElement('img');
+      img.className = 'journal-card-thumb-img';
+      img.src = n.imageBefore;
+      img.alt = '';
+      thumb.appendChild(img);
+    } else {
+      thumb.innerHTML = '<span class="journal-card-thumb-icon" aria-hidden="true">📊</span>';
+    }
+    const body = document.createElement('div');
+    body.className = 'journal-card-body';
+    const h = document.createElement('h3');
+    h.className = 'journal-card-title';
+    h.textContent = n.title || 'Daily Trade Log';
+    const tagsWrap = document.createElement('div');
+    tagsWrap.className = 'journal-card-tags';
+    const pills = journalEntryDisplayPills(e);
+    pills.forEach((pill) => {
+      const span = document.createElement('span');
+      span.className = pill.cls;
+      span.textContent = pill.text;
+      tagsWrap.appendChild(span);
+    });
+    const timeEl = document.createElement('time');
+    timeEl.className = 'journal-card-date';
+    timeEl.dateTime = e.dateKey || '';
+    timeEl.textContent = formatJournalDateDisplay(e.dateKey);
+    body.appendChild(h);
+    body.appendChild(tagsWrap);
+    body.appendChild(timeEl);
+    card.appendChild(thumb);
+    card.appendChild(body);
+    card.addEventListener('click', () => openJournalEntryModal(e.id));
+    grid.appendChild(card);
+  });
+  const addCard = document.createElement('button');
+  addCard.type = 'button';
+  addCard.className = 'journal-card journal-card-new';
+  addCard.innerHTML = '<span class="journal-card-new-inner"><span class="journal-card-new-plus">+</span><span>New entry</span></span>';
+  addCard.addEventListener('click', () => openJournalEntryModal(null));
+  grid.appendChild(addCard);
+}
+
+function renderJournalCalendar() {
+  const grid = document.getElementById('journalCalGrid');
+  const label = document.getElementById('journalCalMonthLabel');
+  if (!grid) return;
+  const year = journalLogMonth.getFullYear();
+  const month = journalLogMonth.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDay = new Date(year, month, 1).getDay();
+  const monthKeyPrefix = `${year}-${String(month + 1).padStart(2, '0')}-`;
+  if (label) label.textContent = journalLogMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const entries = getJournalEntriesForStrategy(selectedStrategyId);
+  const byDay = {};
+  entries.forEach((e) => {
+    if (!e.dateKey || !e.dateKey.startsWith(monthKeyPrefix)) return;
+    const parts = e.dateKey.split('-');
+    const day = parseInt(parts[2], 10);
+    if (!day || Number.isNaN(day)) return;
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push(e);
+  });
+  const today = new Date();
+  const isTodayNum = (d) =>
+    d === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+  grid.innerHTML = '';
+  const headers = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  headers.forEach((h) => {
+    const el = document.createElement('div');
+    el.className = 'journal-cal-day-header';
+    el.textContent = h;
+    grid.appendChild(el);
+  });
+  for (let i = 0; i < firstDay; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'journal-cal-cell journal-cal-cell-empty';
+    grid.appendChild(cell);
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = document.createElement('div');
+    cell.className = 'journal-cal-cell';
+    if (isTodayNum(d)) cell.classList.add('is-today');
+    const num = document.createElement('span');
+    num.className = 'journal-cal-day-num';
+    num.textContent = String(d);
+    cell.appendChild(num);
+    const list = byDay[d] || [];
+    list.forEach((e) => {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'journal-cal-entry';
+      const t = e.title || 'Untitled';
+      pill.textContent = t.length > 24 ? t.slice(0, 22) + '…' : t;
+      pill.title = t;
+      pill.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openJournalEntryModal(e.id);
+      });
+      cell.appendChild(pill);
+    });
+    cell.addEventListener('click', () => {
+      const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      openJournalEntryModal(null, key);
+    });
+    grid.appendChild(cell);
+  }
+}
+
+function switchJournalView(view) {
+  const overview = document.getElementById('journalPanelOverview');
+  const cal = document.getElementById('journalPanelCalendar');
+  const tabO = document.getElementById('journalTabOverview');
+  const tabC = document.getElementById('journalTabCalendar');
+  if (view === 'calendar') {
+    overview?.classList.remove('is-active');
+    overview?.setAttribute('hidden', '');
+    cal?.classList.add('is-active');
+    cal?.removeAttribute('hidden');
+    tabO?.classList.remove('active');
+    tabO?.setAttribute('aria-selected', 'false');
+    tabC?.classList.add('active');
+    tabC?.setAttribute('aria-selected', 'true');
+    renderJournalCalendar();
+  } else {
+    cal?.classList.remove('is-active');
+    cal?.setAttribute('hidden', '');
+    overview?.classList.add('is-active');
+    overview?.removeAttribute('hidden');
+    tabC?.classList.remove('active');
+    tabC?.setAttribute('aria-selected', 'false');
+    tabO?.classList.add('active');
+    tabO?.setAttribute('aria-selected', 'true');
+    renderJournalOverview();
+  }
+}
+
+function closeJournalOptionEditor() {
+  // Persist rename on any close path (outside click, Escape, opening another surface) — blur alone can lose the race.
+  commitJournalOptionRename();
+  const pop = document.getElementById('journalOptionEditPop');
+  if (pop) pop.hidden = true;
+  journalOptionEditKind = null;
+  journalOptionEditLabel = null;
+  journalOptionEditAnchorEl = null;
+}
+
+function positionJournalOptionEditor(anchor) {
+  const pop = document.getElementById('journalOptionEditPop');
+  if (!pop || !anchor) return;
+  const r = anchor.getBoundingClientRect();
+  const w = Math.min(300, window.innerWidth - 24);
+  let left = r.right - w;
+  if (left < 8) left = r.left;
+  if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+  let top = r.bottom + 6;
+  if (top + 360 > window.innerHeight - 8) top = Math.max(8, r.top - 360);
+  pop.style.position = 'fixed';
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.width = w + 'px';
+  pop.style.zIndex = '10060';
+}
+
+function renderJournalOptionEditColors() {
+  const ul = document.getElementById('journalOptionEditColorList');
+  if (!ul || !journalOptionEditKind || journalOptionEditLabel == null) return;
+  const opts = loadJournalOptions();
+  let map = opts.emotionColors;
+  if (journalOptionEditKind === 'risk') map = opts.riskColors;
+  if (journalOptionEditKind === 'category') map = opts.categoryColors;
+  const current = normalizeColorKey((map && map[journalOptionEditLabel]) || getDefaultColorKeyForOption(journalOptionEditKind, journalOptionEditLabel));
+  const names = {
+    default: 'Default',
+    gray: 'Gray',
+    brown: 'Brown',
+    orange: 'Orange',
+    yellow: 'Yellow',
+    green: 'Green',
+    blue: 'Blue',
+    purple: 'Purple',
+    pink: 'Pink',
+    red: 'Red'
+  };
+  ul.innerHTML = '';
+  JOURNAL_NOTION_PALETTE.forEach((key) => {
+    const li = document.createElement('li');
+    li.className = 'journal-option-edit-color-row';
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', key === current ? 'true' : 'false');
+    if (key === current) li.classList.add('is-selected');
+    li.dataset.color = key;
+    const sw = document.createElement('span');
+    sw.className = 'journal-option-edit-swatch journal-palette-swatch-' + key;
+    const nm = document.createElement('span');
+    nm.className = 'journal-option-edit-color-name';
+    nm.textContent = names[key] || key;
+    const chk = document.createElement('span');
+    chk.className = 'journal-option-edit-check';
+    chk.textContent = key === current ? '✓' : '';
+    chk.setAttribute('aria-hidden', 'true');
+    li.appendChild(sw);
+    li.appendChild(nm);
+    li.appendChild(chk);
+    li.addEventListener('click', () => {
+      setJournalOptionColor(journalOptionEditKind, journalOptionEditLabel, key);
+      renderJournalOptionEditColors();
+      renderJournalPickerList();
+      renderJournalEmotionChips();
+      journalRefreshPillDisplaysInModal();
+      renderJournalOverview();
+    });
+    ul.appendChild(li);
+  });
+}
+
+function openJournalOptionEditor(kind, label, anchorEl) {
+  closeJournalPickerPop();
+  journalOptionEditKind = kind;
+  journalOptionEditLabel = label;
+  journalOptionEditAnchorEl = anchorEl;
+  const pop = document.getElementById('journalOptionEditPop');
+  const input = document.getElementById('journalOptionEditInput');
+  if (!pop || !input) return;
+  input.value = label;
+  renderJournalOptionEditColors();
+  pop.hidden = false;
+  positionJournalOptionEditor(anchorEl || journalPickerAnchorEl);
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 0);
+}
+
+function commitJournalOptionRename() {
+  const input = document.getElementById('journalOptionEditInput');
+  if (!input || !journalOptionEditKind || journalOptionEditLabel == null) return;
+  const newLabel = input.value.trim();
+  const oldLabel = journalOptionEditLabel;
+  if (newLabel === oldLabel) return;
+  if (!newLabel) {
+    input.value = oldLabel;
+    return;
+  }
+  renameJournalOptionInStorage(journalOptionEditKind, oldLabel, newLabel);
+  renderJournalOptionEditColors();
+  renderJournalPickerList();
+  renderJournalEmotionChips();
+  journalRefreshPillDisplaysInModal();
+  renderJournalOverview();
+}
+
+function deleteJournalOptionFromEditor() {
+  if (!journalOptionEditKind || journalOptionEditLabel == null) return;
+  commitJournalOptionRename();
+  if (!journalOptionEditKind || journalOptionEditLabel == null) return;
+  deleteJournalOptionFromStorage(journalOptionEditKind, journalOptionEditLabel);
+  closeJournalOptionEditor();
+  renderJournalPickerList();
+  renderJournalEmotionChips();
+  journalRefreshPillDisplaysInModal();
+  renderJournalOverview();
+}
+
+function closeJournalPickerPop() {
+  const pop = document.getElementById('journalPickerPop');
+  if (pop) pop.hidden = true;
+  journalPickerKind = null;
+  journalPickerAnchorEl = null;
+  document.querySelectorAll('.journal-prop-trigger[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+}
+
+function positionJournalPicker(anchor) {
+  const pop = document.getElementById('journalPickerPop');
+  if (!pop || !anchor) return;
+  const r = anchor.getBoundingClientRect();
+  const w = Math.min(320, window.innerWidth - 24);
+  let left = r.left;
+  if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+  if (left < 8) left = 8;
+  let top = r.bottom + 4;
+  const ph = 280;
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 4);
+  pop.style.position = 'fixed';
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.width = w + 'px';
+  pop.style.zIndex = '10050';
+}
+
+function journalPickerOptionsForKind() {
+  const o = loadJournalOptions();
+  if (journalPickerKind === 'category') return o.categories;
+  if (journalPickerKind === 'emotion') return o.emotions;
+  if (journalPickerKind === 'risk') return o.riskTypes;
+  return [];
+}
+
+function journalPickerExactMatchExists(qLower) {
+  if (!qLower) return true;
+  return journalPickerOptionsForKind().some((x) => String(x).toLowerCase() === qLower);
+}
+
+/** True when the Create button would be visible (new option name, non-empty). */
+function journalPickerCanCreateFromSearch() {
+  const searchEl = document.getElementById('journalPickerSearch');
+  if (!searchEl || !journalPickerKind) return false;
+  const rawQ = String(searchEl.value || '').trim();
+  if (!rawQ) return false;
+  return !journalPickerExactMatchExists(rawQ.toLowerCase());
+}
+
+function renderJournalPickerList() {
+  const searchEl = document.getElementById('journalPickerSearch');
+  const ul = document.getElementById('journalPickerList');
+  const createBtn = document.getElementById('journalPickerCreateBtn');
+  if (!ul || !createBtn || !journalPickerKind) return;
+  const rawQ = (searchEl && searchEl.value) || '';
+  const qLower = rawQ.trim().toLowerCase();
+  const all = journalPickerOptionsForKind();
+  const filtered = !qLower ? all : all.filter((x) => String(x).toLowerCase().includes(qLower));
+  ul.innerHTML = '';
+  filtered.forEach((val) => {
+    const li = document.createElement('li');
+    li.className = 'journal-picker-li';
+    li.dataset.value = val;
+    if (journalPickerKind === 'emotion' && journalDraftEmotions.includes(val)) li.classList.add('is-selected');
+    if (
+      journalPickerKind === 'category' &&
+      journalDraftCategories.some((x) => x.toLowerCase() === String(val).toLowerCase())
+    ) {
+      li.classList.add('is-selected');
+    }
+    const grip = document.createElement('span');
+    grip.className = 'journal-picker-grip';
+    grip.setAttribute('aria-hidden', 'true');
+    grip.textContent = '⋮⋮';
+    const label = document.createElement('span');
+    if (journalPickerKind === 'emotion') {
+      label.className = journalOptionPillClass('emotion', val);
+      label.textContent = val;
+    } else if (journalPickerKind === 'risk') {
+      label.className = journalOptionPillClass('risk', val);
+      label.textContent = val;
+    } else {
+      label.className = journalOptionPillClass('category', val);
+      label.textContent = val;
+    }
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'journal-picker-option-edit';
+    editBtn.setAttribute('aria-label', 'Edit option');
+    editBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openJournalOptionEditor(journalPickerKind, val, editBtn);
+    });
+    li.appendChild(grip);
+    li.appendChild(label);
+    li.appendChild(editBtn);
+    ul.appendChild(li);
+  });
+  const canCreate = rawQ.trim().length > 0 && !journalPickerExactMatchExists(qLower);
+  createBtn.hidden = !canCreate;
+  createBtn.textContent = 'Create "' + rawQ.trim() + '"';
+}
+
+function toggleJournalCategory(val) {
+  const v = String(val || '').trim();
+  if (!v) return;
+  const idx = journalDraftCategories.findIndex((x) => x.toLowerCase() === v.toLowerCase());
+  if (idx >= 0) journalDraftCategories = journalDraftCategories.filter((_, i) => i !== idx);
+  else {
+    journalDraftCategories.push(v);
+    journalDraftCategories = dedupeSorted(journalDraftCategories);
+  }
+  renderJournalCategoryChips();
+}
+
+function renderJournalCategoryChips() {
+  const container = document.getElementById('journalCategoryChips');
+  if (!container) return;
+  container.innerHTML = '';
+  journalDraftCategories.forEach((cat) => {
+    const wrap = document.createElement('span');
+    wrap.className = 'journal-emotion-chip-wrap';
+    const pill = document.createElement('span');
+    pill.className = journalOptionPillClass('category', cat);
+    pill.textContent = cat;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'journal-emotion-chip-remove';
+    rm.setAttribute('aria-label', 'Remove ' + cat);
+    rm.textContent = '×';
+    rm.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      journalDraftCategories = journalDraftCategories.filter((x) => x !== cat);
+      renderJournalCategoryChips();
+    });
+    wrap.appendChild(pill);
+    wrap.appendChild(rm);
+    container.appendChild(wrap);
+  });
+}
+
+function applyJournalRisk(val) {
+  const h = document.getElementById('journalEntryRisk');
+  if (h) h.value = val || '';
+  journalRefreshPillDisplaysInModal();
+}
+
+function toggleJournalEmotion(val) {
+  if (journalDraftEmotions.includes(val)) journalDraftEmotions = journalDraftEmotions.filter((x) => x !== val);
+  else journalDraftEmotions.push(val);
+  renderJournalEmotionChips();
+}
+
+function renderJournalEmotionChips() {
+  const container = document.getElementById('journalEmotionChips');
+  if (!container) return;
+  container.innerHTML = '';
+  journalDraftEmotions.forEach((em) => {
+    const wrap = document.createElement('span');
+    wrap.className = 'journal-emotion-chip-wrap';
+    const pill = document.createElement('span');
+    pill.className = journalOptionPillClass('emotion', em);
+    pill.textContent = em;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'journal-emotion-chip-remove';
+    rm.setAttribute('aria-label', 'Remove ' + em);
+    rm.textContent = '×';
+    rm.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      journalDraftEmotions = journalDraftEmotions.filter((x) => x !== em);
+      renderJournalEmotionChips();
+    });
+    wrap.appendChild(pill);
+    wrap.appendChild(rm);
+    container.appendChild(wrap);
+  });
+}
+
+function openJournalPicker(kind, anchorEl) {
+  document.querySelectorAll('.journal-prop-trigger[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+  journalPickerKind = kind;
+  journalPickerAnchorEl = anchorEl;
+  const pop = document.getElementById('journalPickerPop');
+  const searchEl = document.getElementById('journalPickerSearch');
+  if (!pop || !searchEl || !anchorEl) return;
+  searchEl.value = '';
+  pop.hidden = false;
+  anchorEl.setAttribute('aria-expanded', 'true');
+  renderJournalPickerList();
+  positionJournalPicker(anchorEl);
+  searchEl.focus();
+}
+
+function setJournalImageSlot(slot, dataUrl) {
+  journalImageDraft[slot] = dataUrl || null;
+  const prev = document.getElementById(slot === 'before' ? 'journalImageBeforePreview' : 'journalImageAfterPreview');
+  const img = document.getElementById(slot === 'before' ? 'journalImageBeforeImg' : 'journalImageAfterImg');
+  const btn = document.getElementById(slot === 'before' ? 'journalImageBeforeBtn' : 'journalImageAfterBtn');
+  if (!prev || !img || !btn) return;
+  if (dataUrl) {
+    prev.hidden = false;
+    btn.hidden = true;
+    img.src = dataUrl;
+  } else {
+    prev.hidden = true;
+    btn.hidden = false;
+    img.removeAttribute('src');
+  }
+}
+
+function journalReadFileToSlot(slot, file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  if (file.size > JOURNAL_IMAGE_MAX_BYTES) {
+    alert('Image must be under 2.5 MB.');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const d = reader.result;
+    if (typeof d === 'string') setJournalImageSlot(slot, d);
+  };
+  reader.readAsDataURL(file);
+}
+
+function journalPickerCreateFromSearch() {
+  const searchEl = document.getElementById('journalPickerSearch');
+  const raw = searchEl && searchEl.value ? searchEl.value.trim() : '';
+  if (!raw || !journalPickerKind) return;
+  if (journalPickerKind === 'category') {
+    ensureJournalOption('category', raw);
+    if (!journalDraftCategories.some((x) => x.toLowerCase() === raw.toLowerCase())) journalDraftCategories.push(raw);
+    journalDraftCategories = dedupeSorted(journalDraftCategories);
+    renderJournalCategoryChips();
+    closeJournalPickerPop();
+  } else if (journalPickerKind === 'risk') {
+    ensureJournalOption('risk', raw);
+    applyJournalRisk(raw);
+    closeJournalPickerPop();
+  } else if (journalPickerKind === 'emotion') {
+    ensureJournalOption('emotion', raw);
+    if (!journalDraftEmotions.includes(raw)) journalDraftEmotions.push(raw);
+    renderJournalEmotionChips();
+    closeJournalPickerPop();
+  }
+}
+
+function openJournalEntryModal(editId, presetDateKey) {
+  const modal = document.getElementById('journalEntryModal');
+  const dateInput = document.getElementById('journalEntryDate');
+  const titleInput = document.getElementById('journalEntryTitle');
+  const noteInput = document.getElementById('journalEntryNote');
+  const setupBefore = document.getElementById('journalSetupBefore');
+  const setupAfter = document.getElementById('journalSetupAfter');
+  const editIdInput = document.getElementById('journalEntryEditId');
+  const deleteBtn = document.getElementById('journalEntryDeleteBtn');
+  const err = document.getElementById('journalEntryModalError');
+  if (!modal) return;
+  closeJournalPickerPop();
+  closeJournalOptionEditor();
+  if (err) {
+    err.hidden = true;
+    err.textContent = '';
+  }
+  journalEntryEditId = editId || null;
+  if (editId) {
+    const raw = loadJournalEntries().find((x) => x.id === editId);
+    const e = raw ? normalizeJournalEntry(raw) : null;
+    if (dateInput) dateInput.value = e?.dateKey || '';
+    if (titleInput) titleInput.value = e?.title || 'Daily Trade Log';
+    if (noteInput) noteInput.value = e?.note || '';
+    if (setupBefore) setupBefore.value = e?.setupBefore || '';
+    if (setupAfter) setupAfter.value = e?.setupAfter || '';
+    if (editIdInput) editIdInput.value = editId;
+    if (deleteBtn) deleteBtn.hidden = false;
+    journalDraftCategories = [...normalizeJournalCategories(e)];
+    renderJournalCategoryChips();
+    applyJournalRisk(e?.riskType || '');
+    if (e && (!e.emotions || e.emotions.length === 0) && Array.isArray(e.tags) && e.tags.length > 0) {
+      journalDraftEmotions = [...e.tags];
+    } else {
+      journalDraftEmotions = [...(e?.emotions || [])];
+    }
+    renderJournalEmotionChips();
+    setJournalImageSlot('before', e?.imageBefore || null);
+    setJournalImageSlot('after', e?.imageAfter || null);
+  } else {
+    const dk = presetDateKey || formatDateKey(new Date());
+    if (dateInput) dateInput.value = dk;
+    if (titleInput) titleInput.value = 'Daily Trade Log';
+    if (noteInput) noteInput.value = '';
+    if (setupBefore) setupBefore.value = '';
+    if (setupAfter) setupAfter.value = '';
+    if (editIdInput) editIdInput.value = '';
+    if (deleteBtn) deleteBtn.hidden = true;
+    journalDraftCategories = [];
+    renderJournalCategoryChips();
+    applyJournalRisk('');
+    journalDraftEmotions = [];
+    renderJournalEmotionChips();
+    setJournalImageSlot('before', null);
+    setJournalImageSlot('after', null);
+  }
+  modal.hidden = false;
+}
+
+function closeJournalEntryModal() {
+  const modal = document.getElementById('journalEntryModal');
+  closeJournalPickerPop();
+  closeJournalOptionEditor();
+  if (modal) modal.hidden = true;
+  journalEntryEditId = null;
+}
+
+function saveJournalEntryFromModal() {
+  const dateInput = document.getElementById('journalEntryDate');
+  const titleInput = document.getElementById('journalEntryTitle');
+  const noteInput = document.getElementById('journalEntryNote');
+  const setupBefore = document.getElementById('journalSetupBefore');
+  const setupAfter = document.getElementById('journalSetupAfter');
+  const editIdInput = document.getElementById('journalEntryEditId');
+  const err = document.getElementById('journalEntryModalError');
+  const dateKey = dateInput?.value?.trim();
+  const title = String(titleInput?.value || '').trim() || 'Daily Trade Log';
+  const categories = dedupeSorted([...journalDraftCategories]);
+  const riskType = String(document.getElementById('journalEntryRisk')?.value || '').trim();
+  const emotions = [...journalDraftEmotions];
+  const note = String(noteInput?.value || '').trim();
+  const sb = String(setupBefore?.value || '').trim();
+  const sa = String(setupAfter?.value || '').trim();
+  if (!dateKey) {
+    if (err) {
+      err.textContent = 'Please pick a date.';
+      err.hidden = false;
+    }
+    return;
+  }
+  categories.forEach((c) => ensureJournalOption('category', c));
+  if (riskType) ensureJournalOption('risk', riskType);
+  emotions.forEach((em) => ensureJournalOption('emotion', em));
+  let entries = loadJournalEntries();
+  const editId = editIdInput?.value || journalEntryEditId;
+  const base = {
+    dateKey,
+    title,
+    categories,
+    category: categories[0] || '',
+    emotions,
+    riskType,
+    setupBefore: sb,
+    setupAfter: sa,
+    imageBefore: journalImageDraft.before,
+    imageAfter: journalImageDraft.after,
+    note,
+    strategyId: selectedStrategyId
+  };
+  if (editId) {
+    const idx = entries.findIndex((x) => x.id === editId);
+    if (idx >= 0) {
+      const prev = entries[idx];
+      entries[idx] = {
+        ...prev,
+        ...base,
+        tags: Array.isArray(prev.tags) ? prev.tags : []
+      };
+    }
+  } else {
+    const id =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : 'j' + Date.now() + Math.random().toString(36).slice(2);
+    entries.push({
+      id,
+      ...base,
+      tags: [],
+      createdAt: new Date().toISOString()
+    });
+  }
+  saveJournalEntries(entries);
+  closeJournalEntryModal();
+  renderDailyLogScreen();
+}
+
+function deleteJournalEntryFromModal() {
+  const editIdInput = document.getElementById('journalEntryEditId');
+  const id = editIdInput?.value || journalEntryEditId;
+  if (!id) return;
+  const entries = loadJournalEntries().filter((x) => x.id !== id);
+  saveJournalEntries(entries);
+  closeJournalEntryModal();
+  renderDailyLogScreen();
+}
+
+function journalPrevMonth() {
+  journalLogMonth.setMonth(journalLogMonth.getMonth() - 1);
+  renderJournalCalendar();
+}
+
+function journalNextMonth() {
+  journalLogMonth.setMonth(journalLogMonth.getMonth() + 1);
+  renderJournalCalendar();
+}
+
+function journalGoToday() {
+  const now = new Date();
+  journalLogMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  renderJournalCalendar();
+}
+
+function renderDailyLogScreen() {
+  renderJournalOverview();
+  renderJournalCalendar();
+}
+
 function showScreen(screenId) {
   document.querySelectorAll('.screen').forEach((el) => {
     const isTarget = el.id === 'screen-' + screenId;
@@ -932,8 +2090,8 @@ function showScreen(screenId) {
     tab.setAttribute('aria-current', isActive ? 'page' : null);
   });
   if (screenId === 'calendar') renderCalendar();
+  if (screenId === 'dailylog') renderDailyLogScreen();
   if (screenId === 'analytics' && typeof window.renderAnalytics === 'function') window.renderAnalytics();
-  if (screenId === 'community' && typeof window.renderCommunityFeed === 'function') window.renderCommunityFeed();
 }
 
 function renderCalendar() {
@@ -1140,6 +2298,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
       const remoteList = Array.isArray(remoteStrategies) ? remoteStrategies : [];
       currentProfile = await fetchCurrentProfile(currentUser.id);
+      if (currentProfile?.journal_options != null && typeof currentProfile.journal_options === 'object' && !Array.isArray(currentProfile.journal_options)) {
+        const merged = mergeJournalOptionsObjects(loadJournalOptions(), currentProfile.journal_options);
+        const seeded = seedColorMaps(merged);
+        merged.emotionColors = seeded.emotionColors;
+        merged.riskColors = seeded.riskColors;
+        merged.categoryColors = seeded.categoryColors;
+        saveJournalOptions(merged, { skipSync: true });
+      }
+      void syncJournalOptionsToProfile();
+
       const localStrategies = loadStrategies();
       const localDefault = localStrategies.find((s) => s.id === STRATEGY_DEFAULT_ID);
       const defaultName =
@@ -1194,6 +2362,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hydrateProfileSettings();
     if (typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
     renderCalendar();
+    renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
   }
 
@@ -1271,6 +2440,136 @@ document.addEventListener('DOMContentLoaded', () => {
     tab.addEventListener('click', () => showScreen(tab.dataset.screen));
   });
 
+  document.getElementById('journalTabOverview')?.addEventListener('click', () => switchJournalView('overview'));
+  document.getElementById('journalTabCalendar')?.addEventListener('click', () => switchJournalView('calendar'));
+  document.getElementById('journalNewEntryBtn')?.addEventListener('click', () => openJournalEntryModal(null));
+  document.getElementById('journalPrevMonth')?.addEventListener('click', journalPrevMonth);
+  document.getElementById('journalNextMonth')?.addEventListener('click', journalNextMonth);
+  document.getElementById('journalCalToday')?.addEventListener('click', journalGoToday);
+  document.getElementById('journalEntryModalBackdrop')?.addEventListener('click', closeJournalEntryModal);
+  document.getElementById('journalEntryCloseHeader')?.addEventListener('click', closeJournalEntryModal);
+  document.getElementById('journalEntryCancelBtn')?.addEventListener('click', closeJournalEntryModal);
+  document.getElementById('journalEntrySaveBtn')?.addEventListener('click', saveJournalEntryFromModal);
+  document.getElementById('journalEntryDeleteBtn')?.addEventListener('click', deleteJournalEntryFromModal);
+
+  document.getElementById('journalBtnPickCategory')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openJournalPicker('category', document.getElementById('journalBtnPickCategory'));
+  });
+  document.getElementById('journalBtnPickEmotions')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openJournalPicker('emotion', document.getElementById('journalBtnPickEmotions'));
+  });
+  document.getElementById('journalBtnPickRisk')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openJournalPicker('risk', document.getElementById('journalBtnPickRisk'));
+  });
+  document.getElementById('journalPickerList')?.addEventListener('click', (e) => {
+    if (e.target.closest('.journal-picker-option-edit')) return;
+    const li = e.target.closest('.journal-picker-li');
+    if (!li || !journalPickerKind) return;
+    const val = li.dataset.value;
+    if (!val) return;
+    e.stopPropagation();
+    if (journalPickerKind === 'emotion') {
+      toggleJournalEmotion(val);
+      renderJournalPickerList();
+    } else if (journalPickerKind === 'category') {
+      ensureJournalOption('category', val);
+      toggleJournalCategory(val);
+      renderJournalPickerList();
+    } else if (journalPickerKind === 'risk') {
+      ensureJournalOption('risk', val);
+      applyJournalRisk(val);
+      closeJournalPickerPop();
+    }
+  });
+  document.getElementById('journalPickerSearch')?.addEventListener('input', () => renderJournalPickerList());
+  document.getElementById('journalPickerSearch')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (!journalPickerCanCreateFromSearch()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    journalPickerCreateFromSearch();
+  });
+  document.getElementById('journalPickerCreateBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    journalPickerCreateFromSearch();
+  });
+  document.getElementById('journalPickerPop')?.addEventListener('click', (e) => e.stopPropagation());
+
+  document.getElementById('journalImageBeforeBtn')?.addEventListener('click', () => document.getElementById('journalImageBeforeInput')?.click());
+  document.getElementById('journalImageAfterBtn')?.addEventListener('click', () => document.getElementById('journalImageAfterInput')?.click());
+  document.getElementById('journalImageBeforeInput')?.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) journalReadFileToSlot('before', f);
+    e.target.value = '';
+  });
+  document.getElementById('journalImageAfterInput')?.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) journalReadFileToSlot('after', f);
+    e.target.value = '';
+  });
+  document.getElementById('journalImageBeforeRemove')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setJournalImageSlot('before', null);
+  });
+  document.getElementById('journalImageAfterRemove')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setJournalImageSlot('after', null);
+  });
+
+  document.getElementById('journalOptionEditDeleteBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteJournalOptionFromEditor();
+  });
+  document.getElementById('journalOptionEditInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitJournalOptionRename();
+    }
+  });
+  document.getElementById('journalOptionEditInput')?.addEventListener('blur', () => {
+    setTimeout(() => {
+      const ed = document.getElementById('journalOptionEditPop');
+      if (!ed || ed.hidden || !journalOptionEditKind) return;
+      if (document.activeElement && ed.contains(document.activeElement)) return;
+      commitJournalOptionRename();
+    }, 150);
+  });
+  document.getElementById('journalOptionEditPop')?.addEventListener('click', (e) => e.stopPropagation());
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      const editPop = document.getElementById('journalOptionEditPop');
+      if (editPop && !editPop.hidden) {
+        if (e.target.closest('#journalOptionEditPop')) return;
+        closeJournalOptionEditor();
+        return;
+      }
+      const pop = document.getElementById('journalPickerPop');
+      if (!pop || pop.hidden) return;
+      if (e.target.closest('#journalPickerPop') || e.target.closest('.journal-prop-trigger')) return;
+      closeJournalPickerPop();
+    },
+    true
+  );
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const editPop = document.getElementById('journalOptionEditPop');
+    if (editPop && !editPop.hidden) {
+      closeJournalOptionEditor();
+      e.preventDefault();
+      return;
+    }
+    const pop = document.getElementById('journalPickerPop');
+    if (pop && !pop.hidden) {
+      closeJournalPickerPop();
+      e.preventDefault();
+    }
+  });
+
   let pendingDeleteStrategyId = null;
   let pendingRenameStrategyId = null;
 
@@ -1310,61 +2609,95 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderStrategyPills() {
     strategies = loadStrategies();
-    const container = document.getElementById('strategyPills');
-    if (!container) return;
-    container.innerHTML = '';
-    strategies.forEach((s) => {
-      const wrap = document.createElement('div');
-      wrap.className = 'strategy-pill-wrap';
+    const calendarContainer = document.getElementById('strategyPills');
+    const journalSelect = document.getElementById('journalEntryStrategySelect');
 
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'strategy-pill' + (s.id === selectedStrategyId ? ' selected' : '');
-      btn.textContent = s.name;
-      btn.dataset.strategyId = s.id;
-      btn.setAttribute('aria-pressed', s.id === selectedStrategyId ? 'true' : 'false');
-      btn.addEventListener('click', () => {
-        selectedStrategyId = s.id;
-        saveSelectedStrategyId(selectedStrategyId);
-        container.querySelectorAll('.strategy-pill').forEach((p) => {
-          p.classList.toggle('selected', p.dataset.strategyId === selectedStrategyId);
-          p.setAttribute('aria-pressed', p.dataset.strategyId === selectedStrategyId ? 'true' : 'false');
+    if (calendarContainer) {
+      calendarContainer.innerHTML = '';
+      strategies.forEach((s) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'strategy-pill-wrap';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'strategy-pill' + (s.id === selectedStrategyId ? ' selected' : '');
+        btn.textContent = s.name;
+        btn.dataset.strategyId = s.id;
+        btn.setAttribute('aria-pressed', s.id === selectedStrategyId ? 'true' : 'false');
+        btn.addEventListener('click', () => {
+          selectedStrategyId = s.id;
+          saveSelectedStrategyId(selectedStrategyId);
+          calendarContainer.querySelectorAll('.strategy-pill').forEach((p) => {
+            p.classList.toggle('selected', p.dataset.strategyId === selectedStrategyId);
+            p.setAttribute('aria-pressed', p.dataset.strategyId === selectedStrategyId ? 'true' : 'false');
+          });
+          if (journalSelect) journalSelect.value = selectedStrategyId;
+          renderCalendar();
+          renderDailyLogScreen();
+          if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+          if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
         });
-        renderCalendar();
-        if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
-        if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
-      });
-      wrap.appendChild(btn);
+        wrap.appendChild(btn);
 
-      const renameBtn = document.createElement('button');
-      renameBtn.type = 'button';
-      renameBtn.className = 'strategy-pill-rename';
-      renameBtn.setAttribute('aria-label', 'Rename strategy ' + s.name);
-      renameBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openRenameStrategyModal(s.id, s.name);
-      });
-      wrap.appendChild(renameBtn);
-
-      if (s.id !== STRATEGY_DEFAULT_ID) {
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className = 'strategy-pill-remove';
-        removeBtn.setAttribute('aria-label', 'Delete strategy ' + s.name);
-        removeBtn.textContent = '×';
-        removeBtn.addEventListener('click', (e) => {
+        const renameBtn = document.createElement('button');
+        renameBtn.type = 'button';
+        renameBtn.className = 'strategy-pill-rename';
+        renameBtn.setAttribute('aria-label', 'Rename strategy ' + s.name);
+        renameBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          openDeleteStrategyModal(s.id, s.name);
+          openRenameStrategyModal(s.id, s.name);
         });
-        wrap.appendChild(removeBtn);
-      }
+        wrap.appendChild(renameBtn);
 
-      container.appendChild(wrap);
-    });
+        if (s.id !== STRATEGY_DEFAULT_ID) {
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className = 'strategy-pill-remove';
+          removeBtn.setAttribute('aria-label', 'Delete strategy ' + s.name);
+          removeBtn.textContent = '×';
+          removeBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openDeleteStrategyModal(s.id, s.name);
+          });
+          wrap.appendChild(removeBtn);
+        }
+
+        calendarContainer.appendChild(wrap);
+      });
+    }
+
+    if (journalSelect) {
+      journalSelect.innerHTML = '';
+      strategies.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        journalSelect.appendChild(opt);
+      });
+      if (strategies.some((s) => s.id === selectedStrategyId)) {
+        journalSelect.value = selectedStrategyId;
+      } else if (strategies[0]) {
+        selectedStrategyId = strategies[0].id;
+        saveSelectedStrategyId(selectedStrategyId);
+        journalSelect.value = selectedStrategyId;
+      }
+    }
   }
   window.renderStrategyPills = renderStrategyPills;
+
+  document.getElementById('journalEntryStrategySelect')?.addEventListener('change', (e) => {
+    const id = e.target.value;
+    if (!id) return;
+    selectedStrategyId = id;
+    saveSelectedStrategyId(selectedStrategyId);
+    renderStrategyPills();
+    renderCalendar();
+    renderDailyLogScreen();
+    if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+    if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
+  });
 
   document.getElementById('deleteStrategyModalBackdrop')?.addEventListener('click', closeDeleteStrategyModal);
   document.getElementById('deleteStrategyModalNo')?.addEventListener('click', closeDeleteStrategyModal);
@@ -1397,6 +2730,7 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSelectedStrategyId(id);
     renderStrategyPills();
     renderCalendar();
+    renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
     if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
   });
@@ -1613,6 +2947,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (currentProfile?.default_strategy_name != null && currentProfile.default_strategy_name !== '') {
         profilePayload.default_strategy_name = currentProfile.default_strategy_name;
       }
+      profilePayload.journal_options = loadJournalOptions();
       const { error } = await upsertProfile(currentUser.id, profilePayload);
       settingsSaveProfileBtn.disabled = false;
       if (error) {
@@ -2107,9 +3442,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.renderCompareStrategies = renderCompareStrategies;
 
-  const sharePostCommunityBtn = document.getElementById('sharePostCommunityBtn');
-  const shareCommunityMessage = document.getElementById('shareCommunityMessage');
-
   document.getElementById('shareGenerateBtn')?.addEventListener('click', () => {
     const periodVal = document.getElementById('sharePeriod')?.value || 'month';
     const { token } = buildSnapshotTokenForPeriod(periodVal);
@@ -2119,9 +3451,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('shareLinkInput');
     if (input) input.value = link;
     if (linkBox) linkBox.hidden = false;
-
-    if (sharePostCommunityBtn) sharePostCommunityBtn.hidden = false;
-    if (shareCommunityMessage) shareCommunityMessage.textContent = '';
   });
 
   document.getElementById('shareCopyBtn')?.addEventListener('click', () => {
@@ -2131,151 +3460,6 @@ document.addEventListener('DOMContentLoaded', () => {
       document.execCommand('copy');
     }
   });
-
-  const communityFeedEl = document.getElementById('communityFeed');
-  const communitySortSelect = document.getElementById('communitySortSelect');
-  const communityNewPostBtn = document.getElementById('communityNewPostBtn');
-  const communityPostMessage = document.getElementById('communityPostMessage');
-
-  async function postSnapshotToCommunity() {
-    if (!currentUser) {
-      if (typeof openAuthModal === 'function') openAuthModal();
-      if (communityPostMessage) communityPostMessage.textContent = 'Sign in to post to the community.';
-      if (shareCommunityMessage) shareCommunityMessage.textContent = 'Sign in to post to the community.';
-      return;
-    }
-    if (!lastShareToken) buildSnapshotTokenForPeriod('month');
-    if (!lastShareToken) {
-      if (communityPostMessage) communityPostMessage.textContent = 'Could not build snapshot.';
-      if (shareCommunityMessage) shareCommunityMessage.textContent = 'Could not build snapshot.';
-      return;
-    }
-    const defaultTitle = `Snapshot: ${lastSharePayload?.period || 'recent performance'}`;
-    const title = (prompt('Post title', defaultTitle) || '').trim();
-    if (!title) return;
-    const description = (prompt('Description (optional)', '') || '').trim();
-    const supa = initSupabase();
-    if (!supa) return;
-    if (sharePostCommunityBtn) sharePostCommunityBtn.disabled = true;
-    if (communityPostMessage) communityPostMessage.textContent = '';
-    if (shareCommunityMessage) shareCommunityMessage.textContent = '';
-    const { error } = await supa.from('shared_calendars').insert({
-      user_id: currentUser.id,
-      title,
-      description: description || null,
-      snapshot_token: lastShareToken,
-      topic: 'general',
-      is_public: true
-    });
-    if (sharePostCommunityBtn) sharePostCommunityBtn.disabled = false;
-    if (error) {
-      const err = error.message || 'Could not post to community.';
-      if (communityPostMessage) communityPostMessage.textContent = err;
-      if (shareCommunityMessage) shareCommunityMessage.textContent = err;
-      return;
-    }
-    if (communityPostMessage) communityPostMessage.textContent = 'Posted to community.';
-    if (shareCommunityMessage) shareCommunityMessage.textContent = 'Posted to community.';
-    if (typeof window.renderCommunityFeed === 'function') window.renderCommunityFeed();
-  }
-
-  async function fetchCommunityFeed(sortKey) {
-    const supa = initSupabase();
-    if (!supa) return [];
-    let query = supa
-      .from('shared_calendars')
-      .select('id, title, description, topic, created_at, snapshot_token, profiles!inner(username, avatar_url)')
-      .eq('is_public', true);
-    if (sortKey === 'most_commented') {
-      query = query.order('created_at', { ascending: false }); // Placeholder: real implementation could join comment counts
-    } else {
-      query = query.order('created_at', { ascending: false });
-    }
-    const { data, error } = await query.limit(20);
-    if (error) return [];
-    return data || [];
-  }
-
-  function renderCommunityFeedSkeleton() {
-    if (!communityFeedEl) return;
-    communityFeedEl.innerHTML = '<p class="community-empty-note">Loading community posts…</p>';
-  }
-
-  function renderCommunityFeedEmpty() {
-    if (!communityFeedEl) return;
-    communityFeedEl.innerHTML = '<p class="community-empty-note">When traders share their calendars, they will show up here.</p>';
-  }
-
-  function renderCommunityFeedFromRows(rows) {
-    if (!communityFeedEl) return;
-    if (!rows.length) {
-      renderCommunityFeedEmpty();
-      return;
-    }
-    communityFeedEl.innerHTML = '';
-    rows.forEach((row) => {
-      const card = document.createElement('article');
-      card.className = 'community-post-card';
-      const username = row.profiles?.username || 'Trader';
-      const createdAt = row.created_at ? new Date(row.created_at) : null;
-      const timeLabel = createdAt ? createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-      const initials = username.replace('@', '').split(/\s|_/).filter(Boolean).map((p) => p[0].toUpperCase()).slice(0, 2).join('') || 'TV';
-      card.innerHTML = `
-        <header class="community-post-header">
-          <div class="community-post-author">
-            <div class="community-avatar">${initials}</div>
-            <div class="community-post-meta">
-              <div class="community-post-author-line">
-                <span class="community-username">@${username.replace(/^@/, '')}</span>
-                <span class="community-tag">${row.topic || 'general'}</span>
-              </div>
-              <span class="community-post-time">${timeLabel}</span>
-            </div>
-          </div>
-        </header>
-        <div class="community-post-body">
-          <h3 class="community-post-title">${row.title}</h3>
-          <p class="community-post-description">${row.description || ''}</p>
-        </div>
-        <div class="community-post-stats">
-          <span>Snapshot period: ${row.snapshot_token ? 'shared' : '—'}</span>
-        </div>
-        <footer class="community-post-footer">
-          <button type="button" class="community-post-link" data-post-id="${row.id}">View snapshot</button>
-          <div class="community-post-footer-meta">
-            <span>Comments coming soon</span>
-          </div>
-        </footer>
-      `;
-      communityFeedEl.appendChild(card);
-    });
-  }
-
-  async function renderCommunityFeed() {
-    const sortKey = communitySortSelect?.value || 'newest';
-    renderCommunityFeedSkeleton();
-    const rows = await fetchCommunityFeed(sortKey);
-    renderCommunityFeedFromRows(rows);
-  }
-  window.renderCommunityFeed = renderCommunityFeed;
-
-  if (communitySortSelect) {
-    communitySortSelect.addEventListener('change', () => {
-      renderCommunityFeed();
-    });
-  }
-
-  if (communityNewPostBtn) {
-    communityNewPostBtn.addEventListener('click', () => {
-      postSnapshotToCommunity();
-    });
-  }
-
-  if (sharePostCommunityBtn) {
-    sharePostCommunityBtn.addEventListener('click', () => {
-      postSnapshotToCommunity();
-    });
-  }
 
   const themeSelect = document.getElementById('settingsTheme');
   if (themeSelect) {
@@ -2293,5 +3477,4 @@ document.addEventListener('DOMContentLoaded', () => {
   selectedDate = new Date();
   if (!supa && typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
   showScreen('calendar');
-  if (typeof window.renderCommunityFeed === 'function') window.renderCommunityFeed();
 });

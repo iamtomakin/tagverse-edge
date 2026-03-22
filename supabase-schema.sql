@@ -110,6 +110,7 @@ create table if not exists public.profiles (
 
 -- Display name for the built-in "default" strategy (not stored in strategies table)
 alter table public.profiles add column if not exists default_strategy_name text;
+alter table public.profiles add column if not exists journal_options jsonb;
 
 alter table public.profiles enable row level security;
 

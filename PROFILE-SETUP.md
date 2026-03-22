@@ -35,5 +35,8 @@ You should see **Profile updated.** and a row in **Table Editor → `public.prof
 | File | Purpose |
 |------|--------|
 | `supabase-profiles-setup.sql` | **Run this** in SQL Editor |
+| `supabase-profiles-journal-options.sql` | Adds `journal_options` (categories / emotions / risk labels) if your DB is older |
+
+**Daily Log vocabulary (signed-in users):** After adding `journal_options`, custom categories and related pickers sync to `profiles.journal_options`. Run the small migration file above if `upsert` logs errors about unknown column.
 | `supabase-profiles-bootstrap.sql` | Same logic (legacy name); use **setup** file above |
 | `supabase-schema.sql` | Full project schema (includes `profiles` + other tables) |
