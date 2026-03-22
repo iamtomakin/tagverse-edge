@@ -372,8 +372,8 @@ function deepCloneData(obj) {
 }
 
 /**
- * Cloud-first: start from remote (Supabase). Remote wins on conflicts.
- * Local-only cells (not present in remote) are merged in and uploaded (awaited so writes finish).
+ * Upload local-only calendar cells to Supabase; remote wins when the same key exists.
+ * After merge, applyAuthState re-fetches from DB so localStorage matches the server (SSOT).
  */
 async function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) {
   const merged = deepCloneData(remoteResults);
@@ -405,7 +405,7 @@ async function mergeDailyResultsCloudFirst(remoteResults, localResults, userId) 
 }
 
 /**
- * Same as mergeDailyResultsCloudFirst for declarations.
+ * Same as mergeDailyResultsCloudFirst for declarations; SSOT enforced by applyAuthState refetch.
  */
 async function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, userId) {
   const merged = deepCloneData(remoteDeclarations);
@@ -1092,6 +1092,32 @@ function saveJournalOptions(opts, flags) {
   if (!flags?.skipSync) {
     scheduleJournalOptionsSyncToProfile();
   }
+}
+
+/**
+ * When signed in, profile.journal_options is the source of truth (replaces local vocabulary).
+ */
+function journalOptionsFromRemoteProfileOnly(remote) {
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)) return null;
+  const merged = {
+    categories: Array.isArray(remote.categories)
+      ? dedupeSorted(remote.categories.map(String).filter(Boolean))
+      : [...JOURNAL_DEFAULT_CATEGORIES],
+    emotions: Array.isArray(remote.emotions)
+      ? dedupeSorted(remote.emotions.map(String).filter(Boolean))
+      : [...JOURNAL_CANONICAL_EMOTIONS],
+    riskTypes: Array.isArray(remote.riskTypes)
+      ? dedupeSorted(remote.riskTypes.map(String).filter(Boolean))
+      : [...JOURNAL_DEFAULT_RISK_TYPES],
+    emotionColors: remote.emotionColors && typeof remote.emotionColors === 'object' ? { ...remote.emotionColors } : {},
+    riskColors: remote.riskColors && typeof remote.riskColors === 'object' ? { ...remote.riskColors } : {},
+    categoryColors: remote.categoryColors && typeof remote.categoryColors === 'object' ? { ...remote.categoryColors } : {}
+  };
+  const seeded = seedColorMaps(merged);
+  merged.emotionColors = seeded.emotionColors;
+  merged.riskColors = seeded.riskColors;
+  merged.categoryColors = seeded.categoryColors;
+  return merged;
 }
 
 /** Merge local journal vocabulary with remote profile (union lists; remote color keys override). */
@@ -2284,8 +2310,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function applyAuthState() {
     if (currentUser) {
-      // Cloud-first: Supabase is source of truth; remote wins on conflicts.
-      // Local-only rows (e.g. another device not yet synced) are merged in and uploaded.
+      // Single source of truth: Supabase. Local-only rows are uploaded first, then cache = DB snapshot.
       const localResults = loadDailyResults();
       const localDeclarations = loadDeclarations();
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
@@ -2294,17 +2319,17 @@ document.addEventListener('DOMContentLoaded', () => {
       declarations = await mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, currentUser.id);
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
+      const ssotDr = await fetchDailyResultsFromSupabase(currentUser.id);
+      const ssotDec = await fetchDeclarationsFromSupabase(currentUser.id);
+      dailyResults = deepCloneData(ssotDr);
+      declarations = deepCloneData(ssotDec);
+      saveDailyResults(dailyResults);
+      saveDeclarations(declarations);
 
-      const remoteStrategies = await fetchStrategiesFromSupabase(currentUser.id);
-      const remoteList = Array.isArray(remoteStrategies) ? remoteStrategies : [];
       currentProfile = await fetchCurrentProfile(currentUser.id);
       if (currentProfile?.journal_options != null && typeof currentProfile.journal_options === 'object' && !Array.isArray(currentProfile.journal_options)) {
-        const merged = mergeJournalOptionsObjects(loadJournalOptions(), currentProfile.journal_options);
-        const seeded = seedColorMaps(merged);
-        merged.emotionColors = seeded.emotionColors;
-        merged.riskColors = seeded.riskColors;
-        merged.categoryColors = seeded.categoryColors;
-        saveJournalOptions(merged, { skipSync: true });
+        const replaced = journalOptionsFromRemoteProfileOnly(currentProfile.journal_options);
+        if (replaced) saveJournalOptions(replaced, { skipSync: true });
       }
       void syncJournalOptionsToProfile();
 
@@ -2316,39 +2341,38 @@ document.addEventListener('DOMContentLoaded', () => {
         localDefault?.name ||
         'Default';
 
-      if (remoteList.length > 0) {
-        const hasDefaultRemote = remoteList.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
-        const base = hasDefaultRemote ? remoteList : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }, ...remoteList];
-        const remoteIds = new Set(base.map((s) => s.id));
-        strategies = base.map((s) => {
-          if (s.id === STRATEGY_DEFAULT_ID) return { ...s, name: defaultName };
-          return { ...s };
-        });
-        for (const ls of localStrategies) {
-          if (!remoteIds.has(ls.id)) strategies.push(ls);
-        }
-      } else {
-        strategies = localStrategies.length
-          ? localStrategies.map((s) => (s.id === STRATEGY_DEFAULT_ID ? { ...s, name: defaultName } : s))
-          : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }];
-      }
-
-      saveStrategies(strategies);
+      let remoteList = (await fetchStrategiesFromSupabase(currentUser.id)) || [];
+      if (!Array.isArray(remoteList)) remoteList = [];
 
       const supaSync = initSupabase();
       if (supaSync && currentUser) {
-        const seedIds = new Set(remoteList.map((r) => r.id));
-        for (const s of strategies) {
+        const remoteIds = new Set(remoteList.map((r) => r.id));
+        for (const s of localStrategies) {
           if (s.id === STRATEGY_DEFAULT_ID || !/^[0-9a-f-]{36}$/i.test(s.id)) continue;
-          if (!seedIds.has(s.id)) {
+          if (!remoteIds.has(s.id)) {
             const { error } = await supaSync.from('strategies').upsert(
               { id: s.id, user_id: currentUser.id, name: s.name },
               { onConflict: 'id' }
             );
-            if (error) console.error('[Tagverse] sync local-only strategy', s.id, error.message);
+            if (error) console.error('[Tagverse] sync missing strategy to Supabase', s.id, error.message);
           }
         }
+        const refreshed = await fetchStrategiesFromSupabase(currentUser.id);
+        remoteList = Array.isArray(refreshed) ? refreshed : [];
       }
+
+      if (remoteList.length > 0) {
+        const hasDefaultRemote = remoteList.some((s) => s.id === STRATEGY_DEFAULT_ID || s.name === 'Default');
+        const base = hasDefaultRemote ? remoteList : [{ id: STRATEGY_DEFAULT_ID, name: defaultName }, ...remoteList];
+        strategies = base.map((s) => {
+          if (s.id === STRATEGY_DEFAULT_ID) return { ...s, name: defaultName };
+          return { ...s };
+        });
+      } else {
+        strategies = [{ id: STRATEGY_DEFAULT_ID, name: defaultName }];
+      }
+
+      saveStrategies(strategies);
     } else {
       dailyResults = loadDailyResults();
       declarations = loadDeclarations();
