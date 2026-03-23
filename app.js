@@ -675,11 +675,15 @@ async function persistDayResultToSupabase(userId, strategyId, dateKey, instrumen
     trade_1_r: entry.trade_1_r ?? null,
     strategy_id: isDefaultStrategy ? null : strategyId
   };
-  const onConflict = isDefaultStrategy
-    ? 'user_id,date_key,instrument'
-    : 'user_id,strategy_id,date_key,instrument';
-  const { error } = await supa.from('daily_results').upsert(row, { onConflict });
-  if (error) console.error('[Tagverse] persist daily_results failed:', error.message, { dateKey, instrument, strategyId });
+  let del = supa.from('daily_results').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+  del = isDefaultStrategy ? del.is('strategy_id', null) : del.eq('strategy_id', strategyId);
+  const { error: delError } = await del;
+  if (delError) {
+    console.error('[Tagverse] persist daily_results delete step failed:', delError.message, { dateKey, instrument, strategyId });
+    return { error: delError };
+  }
+  const { error } = await supa.from('daily_results').insert(row);
+  if (error) console.error('[Tagverse] persist daily_results insert step failed:', error.message, { dateKey, instrument, strategyId });
   return { error };
 }
 
@@ -695,11 +699,15 @@ async function persistDeclarationToSupabase(userId, strategyId, dateKey, instrum
     created_at: createdAt,
     strategy_id: isDefaultStrategy ? null : strategyId
   };
-  const onConflict = isDefaultStrategy
-    ? 'user_id,date_key,instrument'
-    : 'user_id,strategy_id,date_key,instrument';
-  const { error } = await supa.from('declarations').upsert(row, { onConflict });
-  if (error) console.error('[Tagverse] persist declarations failed:', error.message, { dateKey, instrument, strategyId });
+  let del = supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
+  del = isDefaultStrategy ? del.is('strategy_id', null) : del.eq('strategy_id', strategyId);
+  const { error: delError } = await del;
+  if (delError) {
+    console.error('[Tagverse] persist declarations delete step failed:', delError.message, { dateKey, instrument, strategyId });
+    return { error: delError };
+  }
+  const { error } = await supa.from('declarations').insert(row);
+  if (error) console.error('[Tagverse] persist declarations insert step failed:', error.message, { dateKey, instrument, strategyId });
   return { error };
 }
 
