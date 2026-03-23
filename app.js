@@ -454,19 +454,18 @@ async function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations
 }
 
 /**
- * Force-upload local calendar state to Supabase before a manual sync pull.
- * This guarantees "Sync now" won't revert recent local edits if immediate writes raced/failed earlier.
+ * Force-upload the currently selected strategy's local calendar state before a manual sync pull.
+ * This avoids cross-strategy overwrite collisions when cloud uniqueness is (user_id, date_key, instrument).
  */
-async function pushLocalCalendarToCloud(userId) {
+async function pushSelectedStrategyCalendarToCloud(userId, strategyId) {
   if (!userId) return { ok: true, errors: 0 };
   let errors = 0;
 
   const localDr = loadDailyResults();
-  for (const sid of Object.keys(localDr || {})) {
-    const bucket = localDr[sid];
-    if (!bucket || typeof bucket !== 'object') continue;
-    for (const dateKey of Object.keys(bucket)) {
-      const byDate = bucket[dateKey];
+  const drBucket = localDr && localDr[strategyId];
+  if (drBucket && typeof drBucket === 'object') {
+    for (const dateKey of Object.keys(drBucket)) {
+      const byDate = drBucket[dateKey];
       if (!byDate || typeof byDate !== 'object') continue;
       const normalized = isLegacyDailyEntry(byDate) ? migrateDailyResults({ [dateKey]: byDate }) : { [dateKey]: byDate };
       const byDateNorm = normalized[dateKey];
@@ -474,18 +473,17 @@ async function pushLocalCalendarToCloud(userId) {
       for (const inst of Object.keys(byDateNorm)) {
         const entry = byDateNorm[inst];
         if (!entry || typeof entry !== 'object') continue;
-        const { error } = await persistDayResultToSupabase(userId, sid, dateKey, inst, entry);
+        const { error } = await persistDayResultToSupabase(userId, strategyId, dateKey, inst, entry);
         if (error) errors++;
       }
     }
   }
 
   const localDec = loadDeclarations();
-  for (const sid of Object.keys(localDec || {})) {
-    const bucket = localDec[sid];
-    if (!bucket || typeof bucket !== 'object') continue;
-    for (const dateKey of Object.keys(bucket)) {
-      const byDate = bucket[dateKey];
+  const decBucket = localDec && localDec[strategyId];
+  if (decBucket && typeof decBucket === 'object') {
+    for (const dateKey of Object.keys(decBucket)) {
+      const byDate = decBucket[dateKey];
       if (!byDate || typeof byDate !== 'object') continue;
       const normalized = isLegacyDeclarationEntry(byDate) ? migrateDeclarations({ [dateKey]: byDate }) : { [dateKey]: byDate };
       const byDateNorm = normalized[dateKey];
@@ -493,7 +491,7 @@ async function pushLocalCalendarToCloud(userId) {
       for (const inst of Object.keys(byDateNorm)) {
         const entry = byDateNorm[inst];
         if (!entry || typeof entry !== 'object') continue;
-        const { error } = await persistDeclarationToSupabase(userId, sid, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
+        const { error } = await persistDeclarationToSupabase(userId, strategyId, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
         if (error) errors++;
       }
     }
@@ -3939,7 +3937,7 @@ document.addEventListener('DOMContentLoaded', () => {
         await awaitPendingCloudWrites();
       }
       if (msg) msg.textContent = 'Uploading local changes…';
-      const pushResult = await pushLocalCalendarToCloud(currentUser.id);
+      const pushResult = await pushSelectedStrategyCalendarToCloud(currentUser.id, selectedStrategyId);
       if (!pushResult.ok) {
         if (msg) msg.textContent = 'Could not upload all local changes. Check connection and try again.';
         if (btn) btn.disabled = false;
