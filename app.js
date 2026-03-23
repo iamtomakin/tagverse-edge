@@ -508,6 +508,30 @@ async function fetchStrategiesFromSupabase(userId) {
   return (rows || []).map((r) => ({ id: r.id, name: r.name }));
 }
 
+/** Load one strategy row (e.g. profile.calendar_preferences references a UUID missing from merged list). */
+async function fetchStrategyByIdFromSupabase(userId, strategyId) {
+  const supa = initSupabase();
+  if (!supa || !userId || !strategyId || strategyId === STRATEGY_DEFAULT_ID) return null;
+  const { data, error } = await supa.from('strategies').select('id, name').eq('user_id', userId).eq('id', strategyId).maybeSingle();
+  if (error || !data) return null;
+  return { id: data.id, name: data.name };
+}
+
+/**
+ * Ensures the strategy selected in cloud profile exists in the in-memory list (fixes phone vs desktop mismatch).
+ */
+async function ensureStrategyInListForUser(userId, strategyIdStr) {
+  if (!strategyIdStr || strategyIdStr === STRATEGY_DEFAULT_ID) return;
+  if (strategies.some((s) => s.id === strategyIdStr)) return;
+  const row = await fetchStrategyByIdFromSupabase(userId, strategyIdStr);
+  if (!row) {
+    console.warn('[Tagverse] calendar_preferences strategyId not found in strategies table:', strategyIdStr);
+    return;
+  }
+  strategies.push(row);
+  saveStrategies(strategies);
+}
+
 async function insertStrategyToSupabase(userId, id, name) {
   const supa = initSupabase();
   if (!supa) return;
@@ -2554,6 +2578,12 @@ document.addEventListener('DOMContentLoaded', () => {
       declarations = loadDeclarations();
       strategies = loadStrategies();
       currentProfile = null;
+    }
+    if (currentUser && currentProfile?.calendar_preferences?.strategyId) {
+      const sidNeed = currentProfile.calendar_preferences.strategyId;
+      if (typeof sidNeed === 'string' && sidNeed !== STRATEGY_DEFAULT_ID && !strategies.some((s) => s.id === sidNeed)) {
+        await ensureStrategyInListForUser(currentUser.id, sidNeed);
+      }
     }
     selectedStrategyId = loadSelectedStrategyId();
     if (!strategies.some((s) => s.id === selectedStrategyId)) selectedStrategyId = strategies[0]?.id || STRATEGY_DEFAULT_ID;

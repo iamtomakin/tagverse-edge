@@ -18,6 +18,12 @@ This app is deployed on **Vercel** (repo connected to Git).
 - No `vercel.json` is required for a plain static site; the project root is the site root (`index.html` at top level).
 - After deploy, **hard refresh** the live URL if the browser still serves an old `app.js` from cache.
 
+### Phone vs desktop: different strategy selected or P/L
+
+- **Same account** should share **which strategy is selected** and **instrument** via `profiles.calendar_preferences` (run `supabase-profiles-calendar-preferences.sql` if the column is missing).
+- After deploy, use **Settings → Sync calendar from cloud** on both devices once.
+- The **first “Default” pill** can rename to match your profile (`profiles.default_strategy_name`); a **separate** strategy (e.g. “50points”) is its own row in `strategies` and must exist on every device — the app now **fetches that row from Supabase** if it was missing from the merged list.
+
 ---
 
 ## Local preview (static site)
