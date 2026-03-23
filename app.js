@@ -1016,6 +1016,49 @@ function pruneDirtyKeysByLastSync(lastSyncMs) {
   }
 }
 
+function applyDirtyOverlayToCalendarData(remoteResults, remoteDeclarations, localResults, localDeclarations) {
+  const outResults = deepCloneData(remoteResults || {});
+  const outDecl = deepCloneData(remoteDeclarations || {});
+
+  // Apply local upserts that haven't been synced yet.
+  for (const k of Array.from(dirtyDayUpsertKeys)) {
+    const [sid, dateKey, inst] = parseDayDirtyKey(k);
+    const entry = localResults?.[sid]?.[dateKey]?.[inst];
+    if (!entry || typeof entry !== 'object') continue;
+    if (!outResults[sid]) outResults[sid] = {};
+    if (!outResults[sid][dateKey]) outResults[sid][dateKey] = {};
+    outResults[sid][dateKey][inst] = { ...entry };
+  }
+  for (const k of Array.from(dirtyDeclUpsertKeys)) {
+    const [sid, dateKey, inst] = parseDayDirtyKey(k);
+    const entry = localDeclarations?.[sid]?.[dateKey]?.[inst];
+    if (!entry || typeof entry !== 'object') continue;
+    if (!outDecl[sid]) outDecl[sid] = {};
+    if (!outDecl[sid][dateKey]) outDecl[sid][dateKey] = {};
+    outDecl[sid][dateKey][inst] = { ...entry };
+  }
+
+  // Apply local deletes that haven't been synced yet.
+  for (const k of Array.from(dirtyDayDeleteKeys)) {
+    const [sid, dateKey, inst] = parseDayDirtyKey(k);
+    const byDate = outResults?.[sid]?.[dateKey];
+    if (!byDate || typeof byDate !== 'object') continue;
+    delete byDate[inst];
+    if (Object.keys(byDate).length === 0) delete outResults[sid][dateKey];
+    if (outResults[sid] && Object.keys(outResults[sid]).length === 0) delete outResults[sid];
+  }
+  for (const k of Array.from(dirtyDeclDeleteKeys)) {
+    const [sid, dateKey, inst] = parseDayDirtyKey(k);
+    const byDate = outDecl?.[sid]?.[dateKey];
+    if (!byDate || typeof byDate !== 'object') continue;
+    delete byDate[inst];
+    if (Object.keys(byDate).length === 0) delete outDecl[sid][dateKey];
+    if (outDecl[sid] && Object.keys(outDecl[sid]).length === 0) delete outDecl[sid];
+  }
+
+  return { results: outResults, declarations: outDecl };
+}
+
 function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
   const createdAt = new Date().toISOString();
@@ -2876,6 +2919,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // Single source of truth: Supabase calendar rows.
       // We do NOT merge/upload local missing keys during auth refresh because it can resurrect
       // deleted cells from another device.
+      const localResults = loadDailyResults();
+      const localDeclarations = loadDeclarations();
       currentProfile = await fetchCurrentProfile(currentUser.id);
 
       let prefStrategyId = null;
@@ -2891,9 +2936,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
       const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
-
-      dailyResults = deepCloneData(remoteResults);
-      declarations = deepCloneData(remoteDeclarations);
+      const overlaid = applyDirtyOverlayToCalendarData(
+        remoteResults,
+        remoteDeclarations,
+        localResults,
+        localDeclarations
+      );
+      dailyResults = overlaid.results;
+      declarations = overlaid.declarations;
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
 
