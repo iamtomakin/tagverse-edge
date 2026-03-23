@@ -593,6 +593,12 @@ html.theme-light .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-re
   color: var(--text-secondary);
 }
 
+.calendar-last-synced {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
 html.theme-light .sync-now-btn {
   border-color: rgba(0, 0, 0, 0.15);
 }

@@ -18,7 +18,7 @@
  * ---------------------------------------------------------------------------
  */
 
-const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy', journalEntries: 'tagverse_journal_entries', journalOptions: 'tagverse_journal_options', logROptions: 'tagverse_log_r_options' };
+const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy', journalEntries: 'tagverse_journal_entries', journalOptions: 'tagverse_journal_options', logROptions: 'tagverse_log_r_options', lastCalendarSyncAt: 'tagverse_last_calendar_sync_at' };
 
 const STRATEGY_DEFAULT_ID = 'default';
 
@@ -3944,6 +3944,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  const calendarLastSyncedEl = document.getElementById('calendarLastSyncedAt');
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.lastCalendarSyncAt);
+    if (calendarLastSyncedEl && raw) {
+      const ms = Number(raw);
+      if (Number.isFinite(ms)) {
+        const d = new Date(ms);
+        calendarLastSyncedEl.textContent = 'Last synced at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        calendarLastSyncedEl.hidden = false;
+      }
+    }
+  } catch (_) {}
+
   async function runCalendarSync(btnId, msgId) {
     const msg = document.getElementById(msgId);
     const btn = document.getElementById(btnId);
@@ -3976,6 +3989,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       await applyAuthState();
       if (msg) msg.textContent = 'Calendar updated.';
+      try {
+        localStorage.setItem(STORAGE_KEYS.lastCalendarSyncAt, String(Date.now()));
+      } catch (_) {}
+      if (calendarLastSyncedEl) {
+        const d = new Date();
+        calendarLastSyncedEl.textContent = 'Last synced at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        calendarLastSyncedEl.hidden = false;
+      }
     } catch (_) {
       if (msg) msg.textContent = 'Could not sync. Check connection.';
     }
