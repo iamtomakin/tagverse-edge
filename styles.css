@@ -2107,6 +2107,35 @@ html.theme-light .journal-entry-strategy-select {
   opacity: 0.92;
 }
 
+.journal-sync-btn {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: var(--today-btn-bg);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, border-color var(--transition-ease), background-color var(--transition-ease);
+}
+
+.journal-sync-btn:hover {
+  opacity: 0.92;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.journal-sync-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.journal-sync-msg {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
 .journal-panel {
   display: none;
 }

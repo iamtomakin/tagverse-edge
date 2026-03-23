@@ -4226,12 +4226,50 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 3500);
   }
 
+  async function runJournalSync(btnId, msgId) {
+    const msg = document.getElementById(msgId);
+    const btn = document.getElementById(btnId);
+    if (!currentUser) {
+      if (msg) msg.textContent = 'Sign in first.';
+      return;
+    }
+    if (btn) btn.disabled = true;
+    if (msg) msg.textContent = 'Syncing…';
+    try {
+      if (failedCloudWrites.length > 0) {
+        if (msg) msg.textContent = 'Retrying failed writes…';
+        await retryFailedCloudWrites();
+        if (failedCloudWrites.length > 0) {
+          if (msg) msg.textContent = 'Some changes are still pending. Check connection and try again.';
+          if (btn) btn.disabled = false;
+          return;
+        }
+      }
+      if (pendingCloudWrites.size > 0) {
+        if (msg) msg.textContent = 'Finishing cloud writes…';
+        await awaitPendingCloudWrites();
+      }
+      await applyAuthState();
+      if (msg) msg.textContent = 'Daily log updated.';
+    } catch (_) {
+      if (msg) msg.textContent = 'Could not sync. Check connection.';
+    }
+    if (btn) btn.disabled = false;
+    window.setTimeout(() => {
+      if (msg) msg.textContent = '';
+    }, 3500);
+  }
+
   document.getElementById('settingsSyncCalendarBtn')?.addEventListener('click', async () => {
     await runCalendarSync('settingsSyncCalendarBtn', 'settingsSyncCalendarMessage');
   });
 
   document.getElementById('calendarSyncNowBtn')?.addEventListener('click', async () => {
     await runCalendarSync('calendarSyncNowBtn', 'calendarSyncNowMessage');
+  });
+
+  document.getElementById('journalSyncNowBtn')?.addEventListener('click', async () => {
+    await runJournalSync('journalSyncNowBtn', 'journalSyncNowMessage');
   });
 
   const themeSelect = document.getElementById('settingsTheme');
