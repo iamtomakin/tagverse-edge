@@ -39,6 +39,7 @@ You should see **Profile updated.** and a row in **Table Editor → `public.prof
 | `supabase-profiles-log-r-options.sql` | Adds `log_r_options` (JSON array of R values for the calendar log modal) |
 | `supabase-daily-results-total-r-numeric.sql` | Changes `daily_results.total_r` / `trade_1_r` to `numeric` so fractional R can sync |
 | `supabase-profiles-calendar-preferences.sql` | Adds `calendar_preferences` (instrument + strategy for calendar P/L) for cross-device alignment |
+| `supabase-journal-entries.sql` | Adds `journal_entries` table so Daily Log entries sync and deletions propagate across devices |
 
 **Daily Log vocabulary (signed-in users):** After adding `journal_options`, custom categories and related pickers sync to `profiles.journal_options`. Run the small migration file above if `upsert` logs errors about unknown column.
 

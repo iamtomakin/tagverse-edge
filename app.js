@@ -1302,6 +1302,70 @@ function saveJournalEntries(entries) {
   }
 }
 
+async function fetchJournalEntriesFromSupabase(userId) {
+  const supa = initSupabase();
+  if (!supa || !userId) return [];
+  const { data: rows, error } = await supa
+    .from('journal_entries')
+    .select(
+      'id, strategy_id, date_key, title, categories, emotions, risk_type, setup_before, setup_after, image_before, image_after, note, tags, created_at'
+    )
+    .eq('user_id', userId);
+  if (error) {
+    console.error('[Tagverse] fetch journal_entries failed:', error.message, error);
+    return [];
+  }
+  return (rows || []).map((r) => ({
+    id: r.id,
+    strategyId: r.strategy_id,
+    dateKey: r.date_key,
+    title: r.title,
+    categories: r.categories || [],
+    emotions: r.emotions || [],
+    riskType: r.risk_type || '',
+    setupBefore: r.setup_before || '',
+    setupAfter: r.setup_after || '',
+    imageBefore: r.image_before != null ? r.image_before : null,
+    imageAfter: r.image_after != null ? r.image_after : null,
+    note: r.note || '',
+    tags: r.tags || [],
+    createdAt: r.created_at
+  }));
+}
+
+async function upsertJournalEntryToSupabase(userId, entry) {
+  const supa = initSupabase();
+  if (!supa || !userId || !entry?.id) return { error: new Error('Supabase not configured') };
+  const normalized = normalizeJournalEntry(entry);
+  const row = {
+    id: String(normalized.id),
+    user_id: userId,
+    strategy_id: String(normalized.strategyId || STRATEGY_DEFAULT_ID),
+    date_key: String(normalized.dateKey || ''),
+    title: String(normalized.title || 'Daily Trade Log'),
+    categories: Array.isArray(normalized.categories) ? normalized.categories : [],
+    emotions: Array.isArray(normalized.emotions) ? normalized.emotions : [],
+    risk_type: String(normalized.riskType || ''),
+    setup_before: String(normalized.setupBefore || ''),
+    setup_after: String(normalized.setupAfter || ''),
+    image_before: normalized.imageBefore != null ? String(normalized.imageBefore) : null,
+    image_after: normalized.imageAfter != null ? String(normalized.imageAfter) : null,
+    note: String(normalized.note || ''),
+    tags: Array.isArray(normalized.tags) ? normalized.tags : [],
+    created_at: normalized.createdAt ? new Date(normalized.createdAt).toISOString() : new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  const { error } = await supa.from('journal_entries').upsert(row, { onConflict: 'id' });
+  return { error };
+}
+
+async function deleteJournalEntryFromSupabase(userId, entryId) {
+  const supa = initSupabase();
+  if (!supa || !userId || !entryId) return { error: new Error('Supabase not configured') };
+  const { error } = await supa.from('journal_entries').delete().eq('user_id', userId).eq('id', entryId);
+  return { error };
+}
+
 function getJournalEntriesForStrategy(strategyId) {
   return loadJournalEntries().filter((e) => e && e.strategyId === strategyId);
 }
@@ -2484,6 +2548,7 @@ function saveJournalEntryFromModal() {
   emotions.forEach((em) => ensureJournalOption('emotion', em));
   let entries = loadJournalEntries();
   const editId = editIdInput?.value || journalEntryEditId;
+  let finalEntryId = editId || null;
   const base = {
     dateKey,
     title,
@@ -2513,6 +2578,7 @@ function saveJournalEntryFromModal() {
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
         : 'j' + Date.now() + Math.random().toString(36).slice(2);
+    finalEntryId = id;
     entries.push({
       id,
       ...base,
@@ -2521,6 +2587,22 @@ function saveJournalEntryFromModal() {
     });
   }
   saveJournalEntries(entries);
+
+  // Persist to cloud (so other devices see it).
+  if (currentUser && finalEntryId) {
+    const finalEntry = entries.find((x) => x && x.id === finalEntryId);
+    if (finalEntry) {
+      const task = () => upsertJournalEntryToSupabase(currentUser.id, finalEntry);
+      const p = task().then(({ error }) => {
+        if (error) {
+          console.error('[Tagverse] journal_entries upsert failed', error.message || error);
+          queueFailedCloudWrite(task);
+        }
+      });
+      trackCloudWrite(p);
+    }
+  }
+
   closeJournalEntryModal();
   renderDailyLogScreen();
 }
@@ -2531,6 +2613,19 @@ function deleteJournalEntryFromModal() {
   if (!id) return;
   const entries = loadJournalEntries().filter((x) => x.id !== id);
   saveJournalEntries(entries);
+
+  // Delete from cloud (so other devices remove it too).
+  if (currentUser) {
+    const task = () => deleteJournalEntryFromSupabase(currentUser.id, id);
+    const p = task().then(({ error }) => {
+      if (error) {
+        console.error('[Tagverse] journal_entries delete failed', error.message || error);
+        queueFailedCloudWrite(task);
+      }
+    });
+    trackCloudWrite(p);
+  }
+
   closeJournalEntryModal();
   renderDailyLogScreen();
 }
@@ -2801,6 +2896,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const lr = logROptionsFromRemoteProfileOnly(currentProfile.log_r_options);
         if (lr) saveLogROptions(lr, { skipSync: true });
       }
+
+      // Daily Log: synced across devices
+      const remoteJournalEntries = await fetchJournalEntriesFromSupabase(currentUser.id);
+      saveJournalEntries(remoteJournalEntries);
 
       const localStrategies = loadStrategies();
       const localDefault = localStrategies.find((s) => s.id === STRATEGY_DEFAULT_ID);
