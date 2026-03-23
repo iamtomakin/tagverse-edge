@@ -453,6 +453,55 @@ async function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations
   return merged;
 }
 
+/**
+ * Force-upload local calendar state to Supabase before a manual sync pull.
+ * This guarantees "Sync now" won't revert recent local edits if immediate writes raced/failed earlier.
+ */
+async function pushLocalCalendarToCloud(userId) {
+  if (!userId) return { ok: true, errors: 0 };
+  let errors = 0;
+
+  const localDr = loadDailyResults();
+  for (const sid of Object.keys(localDr || {})) {
+    const bucket = localDr[sid];
+    if (!bucket || typeof bucket !== 'object') continue;
+    for (const dateKey of Object.keys(bucket)) {
+      const byDate = bucket[dateKey];
+      if (!byDate || typeof byDate !== 'object') continue;
+      const normalized = isLegacyDailyEntry(byDate) ? migrateDailyResults({ [dateKey]: byDate }) : { [dateKey]: byDate };
+      const byDateNorm = normalized[dateKey];
+      if (!byDateNorm || typeof byDateNorm !== 'object') continue;
+      for (const inst of Object.keys(byDateNorm)) {
+        const entry = byDateNorm[inst];
+        if (!entry || typeof entry !== 'object') continue;
+        const { error } = await persistDayResultToSupabase(userId, sid, dateKey, inst, entry);
+        if (error) errors++;
+      }
+    }
+  }
+
+  const localDec = loadDeclarations();
+  for (const sid of Object.keys(localDec || {})) {
+    const bucket = localDec[sid];
+    if (!bucket || typeof bucket !== 'object') continue;
+    for (const dateKey of Object.keys(bucket)) {
+      const byDate = bucket[dateKey];
+      if (!byDate || typeof byDate !== 'object') continue;
+      const normalized = isLegacyDeclarationEntry(byDate) ? migrateDeclarations({ [dateKey]: byDate }) : { [dateKey]: byDate };
+      const byDateNorm = normalized[dateKey];
+      if (!byDateNorm || typeof byDateNorm !== 'object') continue;
+      for (const inst of Object.keys(byDateNorm)) {
+        const entry = byDateNorm[inst];
+        if (!entry || typeof entry !== 'object') continue;
+        const { error } = await persistDeclarationToSupabase(userId, sid, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
+        if (error) errors++;
+      }
+    }
+  }
+
+  return { ok: errors === 0, errors };
+}
+
 function saveDeclarations(data) {
   try {
     localStorage.setItem(STORAGE_KEYS.declarations, JSON.stringify(data));
@@ -3888,6 +3937,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pendingCloudWrites.size > 0) {
         if (msg) msg.textContent = 'Finishing cloud writes…';
         await awaitPendingCloudWrites();
+      }
+      if (msg) msg.textContent = 'Uploading local changes…';
+      const pushResult = await pushLocalCalendarToCloud(currentUser.id);
+      if (!pushResult.ok) {
+        if (msg) msg.textContent = 'Could not upload all local changes. Check connection and try again.';
+        if (btn) btn.disabled = false;
+        return;
       }
       await applyAuthState();
       if (msg) msg.textContent = 'Calendar updated.';
