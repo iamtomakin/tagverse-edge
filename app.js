@@ -3787,9 +3787,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  document.getElementById('settingsSyncCalendarBtn')?.addEventListener('click', async () => {
-    const msg = document.getElementById('settingsSyncCalendarMessage');
-    const btn = document.getElementById('settingsSyncCalendarBtn');
+  async function runCalendarSync(btnId, msgId) {
+    const msg = document.getElementById(msgId);
+    const btn = document.getElementById(btnId);
     if (!currentUser) {
       if (msg) msg.textContent = 'Sign in first.';
       return;
@@ -3806,6 +3806,14 @@ document.addEventListener('DOMContentLoaded', () => {
     window.setTimeout(() => {
       if (msg) msg.textContent = '';
     }, 3500);
+  }
+
+  document.getElementById('settingsSyncCalendarBtn')?.addEventListener('click', async () => {
+    await runCalendarSync('settingsSyncCalendarBtn', 'settingsSyncCalendarMessage');
+  });
+
+  document.getElementById('calendarSyncNowBtn')?.addEventListener('click', async () => {
+    await runCalendarSync('calendarSyncNowBtn', 'calendarSyncNowMessage');
   });
 
   const themeSelect = document.getElementById('settingsTheme');

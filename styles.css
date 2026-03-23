@@ -543,6 +543,10 @@ html.theme-light .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-re
 
 .calendar-actions {
   margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .log-today-btn {
@@ -559,6 +563,38 @@ html.theme-light .strategy-pill-wrap .strategy-pill.selected + .strategy-pill-re
 
 .log-today-btn:hover {
   opacity: 0.9;
+}
+
+.sync-now-btn {
+  background: var(--today-btn-bg);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color var(--transition-ease), border-color var(--transition-ease), opacity var(--transition-ease);
+}
+
+.sync-now-btn:hover {
+  background: var(--cell-default-hover);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.sync-now-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.calendar-sync-msg {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+html.theme-light .sync-now-btn {
+  border-color: rgba(0, 0, 0, 0.15);
 }
 
 /* Log modal overlay */
