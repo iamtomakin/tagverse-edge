@@ -2651,13 +2651,20 @@ document.addEventListener('DOMContentLoaded', () => {
       if (prefInstrument) selectedInstrument = prefInstrument;
       if (prefStrategyId) selectedStrategyId = prefStrategyId;
 
+      // Only merge/upload the selected strategy's local bucket (if it exists).
+      // If the bucket doesn't exist on this device yet (common on a fresh desktop install),
+      // we use `{}` so we never overwrite the cloud row for the selected strategy.
       const filteredLocalResults =
-        prefStrategyId && localResults && typeof localResults === 'object' && prefStrategyId in localResults
-          ? { [prefStrategyId]: localResults[prefStrategyId] }
+        prefStrategyId && localResults && typeof localResults === 'object'
+          ? localResults[prefStrategyId] && typeof localResults[prefStrategyId] === 'object'
+            ? { [prefStrategyId]: localResults[prefStrategyId] }
+            : {}
           : localResults;
       const filteredLocalDeclarations =
-        prefStrategyId && localDeclarations && typeof localDeclarations === 'object' && prefStrategyId in localDeclarations
-          ? { [prefStrategyId]: localDeclarations[prefStrategyId] }
+        prefStrategyId && localDeclarations && typeof localDeclarations === 'object'
+          ? localDeclarations[prefStrategyId] && typeof localDeclarations[prefStrategyId] === 'object'
+            ? { [prefStrategyId]: localDeclarations[prefStrategyId] }
+            : {}
           : localDeclarations;
 
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
