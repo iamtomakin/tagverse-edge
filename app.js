@@ -2636,10 +2636,34 @@ document.addEventListener('DOMContentLoaded', () => {
       // Single source of truth: Supabase. Local-only rows are uploaded first, then cache = DB snapshot.
       const localResults = loadDailyResults();
       const localDeclarations = loadDeclarations();
+      // Load calendar preferences early so we don't accidentally upload other strategies
+      // and overwrite the same (user_id, date_key, instrument) unique row.
+      currentProfile = await fetchCurrentProfile(currentUser.id);
+
+      let prefStrategyId = null;
+      let prefInstrument = null;
+      const cp = currentProfile?.calendar_preferences;
+      if (cp && typeof cp === 'object' && !Array.isArray(cp)) {
+        if (typeof cp.strategyId === 'string') prefStrategyId = cp.strategyId;
+        if (typeof cp.instrument === 'string' && INSTRUMENTS.includes(cp.instrument)) prefInstrument = cp.instrument;
+      }
+
+      if (prefInstrument) selectedInstrument = prefInstrument;
+      if (prefStrategyId) selectedStrategyId = prefStrategyId;
+
+      const filteredLocalResults =
+        prefStrategyId && localResults && typeof localResults === 'object' && prefStrategyId in localResults
+          ? { [prefStrategyId]: localResults[prefStrategyId] }
+          : localResults;
+      const filteredLocalDeclarations =
+        prefStrategyId && localDeclarations && typeof localDeclarations === 'object' && prefStrategyId in localDeclarations
+          ? { [prefStrategyId]: localDeclarations[prefStrategyId] }
+          : localDeclarations;
+
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
       const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
-      dailyResults = await mergeDailyResultsCloudFirst(remoteResults, localResults, currentUser.id);
-      declarations = await mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations, currentUser.id);
+      dailyResults = await mergeDailyResultsCloudFirst(remoteResults, filteredLocalResults, currentUser.id);
+      declarations = await mergeDeclarationsCloudFirst(remoteDeclarations, filteredLocalDeclarations, currentUser.id);
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
       const ssotDr = await fetchDailyResultsFromSupabase(currentUser.id);
