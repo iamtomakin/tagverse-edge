@@ -460,41 +460,73 @@ async function mergeDeclarationsCloudFirst(remoteDeclarations, localDeclarations
 async function pushSelectedStrategyCalendarToCloud(userId, strategyId) {
   if (!userId) return { ok: true, errors: 0 };
   let errors = 0;
+  const prefix = strategyId + DIRTY_KEY_SEP;
 
-  const localDr = loadDailyResults();
-  const drBucket = localDr && localDr[strategyId];
-  if (drBucket && typeof drBucket === 'object') {
-    for (const dateKey of Object.keys(drBucket)) {
-      const byDate = drBucket[dateKey];
-      if (!byDate || typeof byDate !== 'object') continue;
-      const normalized = isLegacyDailyEntry(byDate) ? migrateDailyResults({ [dateKey]: byDate }) : { [dateKey]: byDate };
-      const byDateNorm = normalized[dateKey];
-      if (!byDateNorm || typeof byDateNorm !== 'object') continue;
-      for (const inst of Object.keys(byDateNorm)) {
-        const entry = byDateNorm[inst];
-        if (!entry || typeof entry !== 'object') continue;
-        const { error } = await persistDayResultToSupabase(userId, strategyId, dateKey, inst, entry);
-        if (error) errors++;
-      }
-    }
+  // Day deletes
+  for (const k of Array.from(dirtyDayDeleteKeys)) {
+    if (!k.startsWith(prefix)) continue;
+    const parts = parseDayDirtyKey(k);
+    const dateKey = parts[1];
+    const inst = parts[2];
+    const { error } = await deleteDayResultFromSupabase(userId, strategyId, dateKey, inst);
+    if (error) errors++;
   }
 
-  const localDec = loadDeclarations();
-  const decBucket = localDec && localDec[strategyId];
-  if (decBucket && typeof decBucket === 'object') {
-    for (const dateKey of Object.keys(decBucket)) {
-      const byDate = decBucket[dateKey];
-      if (!byDate || typeof byDate !== 'object') continue;
-      const normalized = isLegacyDeclarationEntry(byDate) ? migrateDeclarations({ [dateKey]: byDate }) : { [dateKey]: byDate };
-      const byDateNorm = normalized[dateKey];
-      if (!byDateNorm || typeof byDateNorm !== 'object') continue;
-      for (const inst of Object.keys(byDateNorm)) {
-        const entry = byDateNorm[inst];
-        if (!entry || typeof entry !== 'object') continue;
-        const { error } = await persistDeclarationToSupabase(userId, strategyId, dateKey, inst, entry.tradeCountPlanned, entry.createdAt);
-        if (error) errors++;
-      }
+  // Day upserts
+  for (const k of Array.from(dirtyDayUpsertKeys)) {
+    if (!k.startsWith(prefix)) continue;
+    const parts = parseDayDirtyKey(k);
+    const dateKey = parts[1];
+    const inst = parts[2];
+    const entry = dailyResults?.[strategyId]?.[dateKey]?.[inst];
+    if (!entry || typeof entry !== 'object') {
+      const { error } = await deleteDayResultFromSupabase(userId, strategyId, dateKey, inst);
+      if (error) errors++;
+      continue;
     }
+    const { error } = await persistDayResultToSupabase(userId, strategyId, dateKey, inst, entry);
+    if (error) errors++;
+  }
+
+  // Declaration deletes
+  for (const k of Array.from(dirtyDeclDeleteKeys)) {
+    if (!k.startsWith(prefix)) continue;
+    const parts = parseDayDirtyKey(k);
+    const dateKey = parts[1];
+    const inst = parts[2];
+    const { error } = await deleteDeclarationFromSupabase(userId, strategyId, dateKey, inst);
+    if (error) errors++;
+  }
+
+  // Declaration upserts
+  for (const k of Array.from(dirtyDeclUpsertKeys)) {
+    if (!k.startsWith(prefix)) continue;
+    const parts = parseDayDirtyKey(k);
+    const dateKey = parts[1];
+    const inst = parts[2];
+    const entry = declarations?.[strategyId]?.[dateKey]?.[inst];
+    if (!entry || typeof entry !== 'object') {
+      const { error } = await deleteDeclarationFromSupabase(userId, strategyId, dateKey, inst);
+      if (error) errors++;
+      continue;
+    }
+    const { error } = await persistDeclarationToSupabase(
+      userId,
+      strategyId,
+      dateKey,
+      inst,
+      entry.tradeCountPlanned,
+      entry.createdAt
+    );
+    if (error) errors++;
+  }
+
+  // If everything succeeded, clear dirty keys for this strategy.
+  if (errors === 0) {
+    for (const k of Array.from(dirtyDayDeleteKeys)) if (k.startsWith(prefix)) dirtyDayDeleteKeys.delete(k);
+    for (const k of Array.from(dirtyDayUpsertKeys)) if (k.startsWith(prefix)) dirtyDayUpsertKeys.delete(k);
+    for (const k of Array.from(dirtyDeclDeleteKeys)) if (k.startsWith(prefix)) dirtyDeclDeleteKeys.delete(k);
+    for (const k of Array.from(dirtyDeclUpsertKeys)) if (k.startsWith(prefix)) dirtyDeclUpsertKeys.delete(k);
   }
 
   return { ok: errors === 0, errors };
@@ -863,6 +895,20 @@ function formatDeclarationTime(isoString) {
 // Track in-flight Supabase writes so "Sync now" doesn't re-fetch before the user's latest log finishes uploading.
 let pendingCloudWrites = new Set();
 let failedCloudWrites = [];
+
+// Track which calendar cells were changed on THIS device so Sync now uploads only those.
+// This prevents "delete on device A, then Sync on device B resurrects the deleted cell" issues.
+const DIRTY_KEY_SEP = '|';
+function dayDirtyKey(strategyId, dateKey, instrument) {
+  return `${strategyId}${DIRTY_KEY_SEP}${dateKey}${DIRTY_KEY_SEP}${instrument}`;
+}
+function parseDayDirtyKey(key) {
+  return String(key).split(DIRTY_KEY_SEP); // [strategyId, dateKey, instrument]
+}
+let dirtyDayUpsertKeys = new Set();
+let dirtyDayDeleteKeys = new Set();
+let dirtyDeclUpsertKeys = new Set();
+let dirtyDeclDeleteKeys = new Set();
 function trackCloudWrite(promise) {
   if (!promise || typeof promise.then !== 'function') return promise;
   pendingCloudWrites.add(promise);
@@ -899,6 +945,9 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
   const createdAt = new Date().toISOString();
   const sid = selectedStrategyId;
+  const k = dayDirtyKey(sid, dateKey, inst);
+  dirtyDeclUpsertKeys.add(k);
+  dirtyDeclDeleteKeys.delete(k);
   if (!declarations[selectedStrategyId]) declarations[selectedStrategyId] = {};
   const bucket = declarations[selectedStrategyId];
   const existing = bucket[dateKey];
@@ -921,6 +970,9 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
 function setDayResult(dateKey, instrument, totalR, tradeCount) {
   const inst = instrument ?? selectedInstrument;
   const sid = selectedStrategyId;
+  const k = dayDirtyKey(sid, dateKey, inst);
+  dirtyDayUpsertKeys.add(k);
+  dirtyDayDeleteKeys.delete(k);
   const entry = { totalR, tradeCount };
   if (tradeCount === 1) entry.trade_1_r = totalR;
   if (!dailyResults[selectedStrategyId]) dailyResults[selectedStrategyId] = {};
@@ -944,6 +996,8 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
 
 function clearDayLog(dateKey, instrument) {
   const inst = instrument ?? selectedInstrument;
+  const sid = selectedStrategyId;
+  const k = dayDirtyKey(sid, dateKey, inst);
   const bucketDr = dailyResults[selectedStrategyId];
   if (bucketDr) {
     const byDate = bucketDr[dateKey];
@@ -951,8 +1005,9 @@ function clearDayLog(dateKey, instrument) {
       delete byDate[inst];
       if (Object.keys(byDate).length === 0) delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
+      dirtyDayDeleteKeys.add(k);
+      dirtyDayUpsertKeys.delete(k);
       if (currentUser) {
-        const sid = selectedStrategyId;
         const task = () => deleteDayResultFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
           if (error) queueFailedCloudWrite(task);
@@ -962,8 +1017,9 @@ function clearDayLog(dateKey, instrument) {
     } else if (byDate) {
       delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
+      dirtyDayDeleteKeys.add(k);
+      dirtyDayUpsertKeys.delete(k);
       if (currentUser) {
-        const sid = selectedStrategyId;
         const task = () => deleteDayResultFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
           if (error) queueFailedCloudWrite(task);
@@ -979,8 +1035,9 @@ function clearDayLog(dateKey, instrument) {
       delete declByDate[inst];
       if (Object.keys(declByDate).length === 0) delete bucketDc[dateKey];
       saveDeclarations(declarations);
+      dirtyDeclDeleteKeys.add(k);
+      dirtyDeclUpsertKeys.delete(k);
       if (currentUser) {
-        const sid = selectedStrategyId;
         const task = () => deleteDeclarationFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
           if (error) queueFailedCloudWrite(task);
@@ -990,8 +1047,9 @@ function clearDayLog(dateKey, instrument) {
     } else if (declByDate) {
       delete bucketDc[dateKey];
       saveDeclarations(declarations);
+      dirtyDeclDeleteKeys.add(k);
+      dirtyDeclUpsertKeys.delete(k);
       if (currentUser) {
-        const sid = selectedStrategyId;
         const task = () => deleteDeclarationFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
           if (error) queueFailedCloudWrite(task);
@@ -2633,11 +2691,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function applyAuthState() {
     if (currentUser) {
-      // Single source of truth: Supabase. Local-only rows are uploaded first, then cache = DB snapshot.
-      const localResults = loadDailyResults();
-      const localDeclarations = loadDeclarations();
-      // Load calendar preferences early so we don't accidentally upload other strategies
-      // and overwrite the same (user_id, date_key, instrument) unique row.
+      // Single source of truth: Supabase calendar rows.
+      // We do NOT merge/upload local missing keys during auth refresh because it can resurrect
+      // deleted cells from another device.
       currentProfile = await fetchCurrentProfile(currentUser.id);
 
       let prefStrategyId = null;
@@ -2651,32 +2707,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (prefInstrument) selectedInstrument = prefInstrument;
       if (prefStrategyId) selectedStrategyId = prefStrategyId;
 
-      // Only merge/upload the selected strategy's local bucket (if it exists).
-      // If the bucket doesn't exist on this device yet (common on a fresh desktop install),
-      // we use `{}` so we never overwrite the cloud row for the selected strategy.
-      const filteredLocalResults =
-        prefStrategyId && localResults && typeof localResults === 'object'
-          ? localResults[prefStrategyId] && typeof localResults[prefStrategyId] === 'object'
-            ? { [prefStrategyId]: localResults[prefStrategyId] }
-            : {}
-          : localResults;
-      const filteredLocalDeclarations =
-        prefStrategyId && localDeclarations && typeof localDeclarations === 'object'
-          ? localDeclarations[prefStrategyId] && typeof localDeclarations[prefStrategyId] === 'object'
-            ? { [prefStrategyId]: localDeclarations[prefStrategyId] }
-            : {}
-          : localDeclarations;
-
       const remoteResults = await fetchDailyResultsFromSupabase(currentUser.id);
       const remoteDeclarations = await fetchDeclarationsFromSupabase(currentUser.id);
-      dailyResults = await mergeDailyResultsCloudFirst(remoteResults, filteredLocalResults, currentUser.id);
-      declarations = await mergeDeclarationsCloudFirst(remoteDeclarations, filteredLocalDeclarations, currentUser.id);
-      saveDailyResults(dailyResults);
-      saveDeclarations(declarations);
-      const ssotDr = await fetchDailyResultsFromSupabase(currentUser.id);
-      const ssotDec = await fetchDeclarationsFromSupabase(currentUser.id);
-      dailyResults = deepCloneData(ssotDr);
-      declarations = deepCloneData(ssotDec);
+
+      dailyResults = deepCloneData(remoteResults);
+      declarations = deepCloneData(remoteDeclarations);
       saveDailyResults(dailyResults);
       saveDeclarations(declarations);
 
