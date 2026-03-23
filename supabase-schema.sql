@@ -95,9 +95,24 @@ alter table public.daily_results add column if not exists strategy_id uuid refer
 alter table public.declarations add column if not exists strategy_id uuid references public.strategies(id) on delete cascade;
 
 -- Optional: drop old unique and add new one once strategy_id is backfilled
--- alter table public.daily_results drop constraint if exists daily_results_user_id_date_key_instrument_key;
--- alter table public.daily_results add unique(user_id, strategy_id, date_key, instrument);
--- Same for declarations. Run after backfilling strategy_id for all rows.
+alter table public.daily_results drop constraint if exists daily_results_user_id_date_key_instrument_key;
+alter table public.declarations drop constraint if exists declarations_user_id_date_key_instrument_key;
+
+create unique index if not exists daily_results_default_unique_idx
+  on public.daily_results (user_id, date_key, instrument)
+  where strategy_id is null;
+
+create unique index if not exists declarations_default_unique_idx
+  on public.declarations (user_id, date_key, instrument)
+  where strategy_id is null;
+
+create unique index if not exists daily_results_strategy_unique_idx
+  on public.daily_results (user_id, strategy_id, date_key, instrument)
+  where strategy_id is not null;
+
+create unique index if not exists declarations_strategy_unique_idx
+  on public.declarations (user_id, strategy_id, date_key, instrument)
+  where strategy_id is not null;
 
 -- Profiles: per-user public profile (username, optional avatar/bio)
 create table if not exists public.profiles (

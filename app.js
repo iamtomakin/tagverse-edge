@@ -665,6 +665,7 @@ async function persistDefaultStrategyNameToSupabase(name) {
 async function persistDayResultToSupabase(userId, strategyId, dateKey, instrument, entry) {
   const supa = initSupabase();
   if (!supa) return { error: new Error('Supabase not configured') };
+  const isDefaultStrategy = strategyId === STRATEGY_DEFAULT_ID;
   const row = {
     user_id: userId,
     date_key: dateKey,
@@ -672,9 +673,12 @@ async function persistDayResultToSupabase(userId, strategyId, dateKey, instrumen
     total_r: entry.totalR,
     trade_count: entry.tradeCount,
     trade_1_r: entry.trade_1_r ?? null,
-    strategy_id: strategyId === STRATEGY_DEFAULT_ID ? null : strategyId
+    strategy_id: isDefaultStrategy ? null : strategyId
   };
-  const { error } = await supa.from('daily_results').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+  const onConflict = isDefaultStrategy
+    ? 'user_id,date_key,instrument'
+    : 'user_id,strategy_id,date_key,instrument';
+  const { error } = await supa.from('daily_results').upsert(row, { onConflict });
   if (error) console.error('[Tagverse] persist daily_results failed:', error.message, { dateKey, instrument, strategyId });
   return { error };
 }
@@ -682,15 +686,19 @@ async function persistDayResultToSupabase(userId, strategyId, dateKey, instrumen
 async function persistDeclarationToSupabase(userId, strategyId, dateKey, instrument, tradeCountPlanned, createdAt) {
   const supa = initSupabase();
   if (!supa) return { error: new Error('Supabase not configured') };
+  const isDefaultStrategy = strategyId === STRATEGY_DEFAULT_ID;
   const row = {
     user_id: userId,
     date_key: dateKey,
     instrument,
     trade_count_planned: tradeCountPlanned,
     created_at: createdAt,
-    strategy_id: strategyId === STRATEGY_DEFAULT_ID ? null : strategyId
+    strategy_id: isDefaultStrategy ? null : strategyId
   };
-  const { error } = await supa.from('declarations').upsert(row, { onConflict: 'user_id,date_key,instrument' });
+  const onConflict = isDefaultStrategy
+    ? 'user_id,date_key,instrument'
+    : 'user_id,strategy_id,date_key,instrument';
+  const { error } = await supa.from('declarations').upsert(row, { onConflict });
   if (error) console.error('[Tagverse] persist declarations failed:', error.message, { dateKey, instrument, strategyId });
   return { error };
 }
@@ -700,6 +708,7 @@ async function deleteDayResultFromSupabase(userId, strategyId, dateKey, instrume
   if (!supa) return { error: new Error('Supabase not configured') };
   let q = supa.from('daily_results').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
   if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
+  else q = q.is('strategy_id', null);
   const { error } = await q;
   if (error) console.error('[Tagverse] delete daily_results failed:', error.message, { dateKey, instrument, strategyId });
   return { error };
@@ -710,6 +719,7 @@ async function deleteDeclarationFromSupabase(userId, strategyId, dateKey, instru
   if (!supa) return { error: new Error('Supabase not configured') };
   let q = supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
   if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
+  else q = q.is('strategy_id', null);
   const { error } = await q;
   if (error) console.error('[Tagverse] delete declarations failed:', error.message, { dateKey, instrument, strategyId });
   return { error };

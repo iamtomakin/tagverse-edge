@@ -40,6 +40,7 @@ You should see **Profile updated.** and a row in **Table Editor → `public.prof
 | `supabase-daily-results-total-r-numeric.sql` | Changes `daily_results.total_r` / `trade_1_r` to `numeric` so fractional R can sync |
 | `supabase-profiles-calendar-preferences.sql` | Adds `calendar_preferences` (instrument + strategy for calendar P/L) for cross-device alignment |
 | `supabase-journal-entries.sql` | Adds `journal_entries` table so Daily Log entries sync and deletions propagate across devices |
+| `supabase-strategy-scoped-uniques.sql` | Fixes strategy-specific uniqueness for `daily_results` / `declarations` to stop one strategy overwriting another |
 
 **Daily Log vocabulary (signed-in users):** After adding `journal_options`, custom categories and related pickers sync to `profiles.journal_options`. Run the small migration file above if `upsert` logs errors about unknown column.
 
