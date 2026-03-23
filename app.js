@@ -809,6 +809,23 @@ function formatDeclarationTime(isoString) {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
+// Track in-flight Supabase writes so "Sync now" doesn't re-fetch before the user's latest log finishes uploading.
+let pendingCloudWrites = new Set();
+function trackCloudWrite(promise) {
+  if (!promise || typeof promise.then !== 'function') return promise;
+  pendingCloudWrites.add(promise);
+  // Always remove when settled so the sync button can proceed.
+  promise.finally(() => pendingCloudWrites.delete(promise)).catch(() => {});
+  return promise;
+}
+async function awaitPendingCloudWrites(maxWaitMs = 8000) {
+  const start = Date.now();
+  while (pendingCloudWrites.size > 0 && Date.now() - start < maxWaitMs) {
+    const batch = Array.from(pendingCloudWrites);
+    await Promise.allSettled(batch);
+  }
+}
+
 function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
   const createdAt = new Date().toISOString();
@@ -820,9 +837,10 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   bucket[dateKey] = byInstrument;
   saveDeclarations(declarations);
   if (currentUser) {
-    void persistDeclarationToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, tradeCountPlanned, createdAt).then(({ error }) => {
+    const p = persistDeclarationToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, tradeCountPlanned, createdAt).then(({ error }) => {
       if (error) console.error('[Tagverse] Declaration not synced to cloud (saved locally).', error.message);
     });
+    trackCloudWrite(p);
   }
 }
 
@@ -838,9 +856,10 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
   bucket[dateKey] = byInstrument;
   saveDailyResults(dailyResults);
   if (currentUser) {
-    void persistDayResultToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, entry).then(({ error }) => {
+    const p = persistDayResultToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, entry).then(({ error }) => {
       if (error) console.error('[Tagverse] Trade not synced to cloud (saved locally).', error.message);
     });
+    trackCloudWrite(p);
   }
 }
 
@@ -853,11 +872,11 @@ function clearDayLog(dateKey, instrument) {
       delete byDate[inst];
       if (Object.keys(byDate).length === 0) delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
-      if (currentUser) deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+      if (currentUser) trackCloudWrite(deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
     } else if (byDate) {
       delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
-      if (currentUser) deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+      if (currentUser) trackCloudWrite(deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
     }
   }
   const bucketDc = declarations[selectedStrategyId];
@@ -867,11 +886,11 @@ function clearDayLog(dateKey, instrument) {
       delete declByDate[inst];
       if (Object.keys(declByDate).length === 0) delete bucketDc[dateKey];
       saveDeclarations(declarations);
-      if (currentUser) deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+      if (currentUser) trackCloudWrite(deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
     } else if (declByDate) {
       delete bucketDc[dateKey];
       saveDeclarations(declarations);
-      if (currentUser) deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst);
+      if (currentUser) trackCloudWrite(deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
     }
   }
 }
@@ -3797,6 +3816,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btn) btn.disabled = true;
     if (msg) msg.textContent = 'Syncing…';
     try {
+      if (pendingCloudWrites.size > 0) {
+        if (msg) msg.textContent = 'Finishing cloud writes…';
+        await awaitPendingCloudWrites();
+      }
       await applyAuthState();
       if (msg) msg.textContent = 'Calendar updated.';
     } catch (_) {
