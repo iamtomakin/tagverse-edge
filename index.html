@@ -182,8 +182,10 @@
               <button type="button" class="journal-view-tab active" role="tab" aria-selected="true" data-journal-view="overview" id="journalTabOverview">Overview</button>
               <button type="button" class="journal-view-tab" role="tab" aria-selected="false" data-journal-view="calendar" id="journalTabCalendar">Calendar</button>
             </nav>
-            <button type="button" class="journal-new-btn" id="journalNewEntryBtn">+ New</button>
-            <button type="button" class="journal-sync-btn" id="journalSyncNowBtn">Sync now</button>
+            <div class="journal-view-tabs journal-actions-tabs" role="group" aria-label="Daily log actions">
+              <button type="button" class="journal-view-tab" id="journalNewEntryBtn">+ New</button>
+              <button type="button" class="journal-view-tab" id="journalSyncNowBtn">Sync now</button>
+            </div>
             <p class="journal-sync-msg" id="journalSyncNowMessage" role="status" aria-live="polite"></p>
           </div>
         </header>

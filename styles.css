@@ -2136,6 +2136,14 @@ html.theme-light .journal-entry-strategy-select {
   color: var(--text-secondary);
 }
 
+.journal-actions-tabs {
+  margin-left: 0.25rem;
+}
+
+.journal-actions-tabs .journal-view-tab {
+  padding: 0.5rem 0.85rem;
+}
+
 .journal-panel {
   display: none;
 }
