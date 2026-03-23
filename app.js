@@ -598,18 +598,22 @@ async function persistDeclarationToSupabase(userId, strategyId, dateKey, instrum
 
 async function deleteDayResultFromSupabase(userId, strategyId, dateKey, instrument) {
   const supa = initSupabase();
-  if (!supa) return;
+  if (!supa) return { error: new Error('Supabase not configured') };
   let q = supa.from('daily_results').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
   if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
-  await q;
+  const { error } = await q;
+  if (error) console.error('[Tagverse] delete daily_results failed:', error.message, { dateKey, instrument, strategyId });
+  return { error };
 }
 
 async function deleteDeclarationFromSupabase(userId, strategyId, dateKey, instrument) {
   const supa = initSupabase();
-  if (!supa) return;
+  if (!supa) return { error: new Error('Supabase not configured') };
   let q = supa.from('declarations').delete().eq('user_id', userId).eq('date_key', dateKey).eq('instrument', instrument);
   if (strategyId !== STRATEGY_DEFAULT_ID) q = q.eq('strategy_id', strategyId);
-  await q;
+  const { error } = await q;
+  if (error) console.error('[Tagverse] delete declarations failed:', error.message, { dateKey, instrument, strategyId });
+  return { error };
 }
 
 async function deleteStrategyFromSupabase(userId, strategyId) {
@@ -811,6 +815,7 @@ function formatDeclarationTime(isoString) {
 
 // Track in-flight Supabase writes so "Sync now" doesn't re-fetch before the user's latest log finishes uploading.
 let pendingCloudWrites = new Set();
+let failedCloudWrites = [];
 function trackCloudWrite(promise) {
   if (!promise || typeof promise.then !== 'function') return promise;
   pendingCloudWrites.add(promise);
@@ -825,10 +830,28 @@ async function awaitPendingCloudWrites(maxWaitMs = 8000) {
     await Promise.allSettled(batch);
   }
 }
+function queueFailedCloudWrite(task) {
+  if (typeof task !== 'function') return;
+  failedCloudWrites.push(task);
+}
+async function retryFailedCloudWrites() {
+  if (!currentUser || failedCloudWrites.length === 0) return;
+  const retrying = [...failedCloudWrites];
+  failedCloudWrites = [];
+  for (const task of retrying) {
+    try {
+      const res = await task();
+      if (res?.error) failedCloudWrites.push(task);
+    } catch (_) {
+      failedCloudWrites.push(task);
+    }
+  }
+}
 
 function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
   const createdAt = new Date().toISOString();
+  const sid = selectedStrategyId;
   if (!declarations[selectedStrategyId]) declarations[selectedStrategyId] = {};
   const bucket = declarations[selectedStrategyId];
   const existing = bucket[dateKey];
@@ -837,8 +860,12 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   bucket[dateKey] = byInstrument;
   saveDeclarations(declarations);
   if (currentUser) {
-    const p = persistDeclarationToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, tradeCountPlanned, createdAt).then(({ error }) => {
-      if (error) console.error('[Tagverse] Declaration not synced to cloud (saved locally).', error.message);
+    const task = () => persistDeclarationToSupabase(currentUser.id, sid, dateKey, inst, tradeCountPlanned, createdAt);
+    const p = task().then(({ error }) => {
+      if (error) {
+        console.error('[Tagverse] Declaration not synced to cloud (saved locally).', error.message);
+        queueFailedCloudWrite(task);
+      }
     });
     trackCloudWrite(p);
   }
@@ -846,6 +873,7 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
 
 function setDayResult(dateKey, instrument, totalR, tradeCount) {
   const inst = instrument ?? selectedInstrument;
+  const sid = selectedStrategyId;
   const entry = { totalR, tradeCount };
   if (tradeCount === 1) entry.trade_1_r = totalR;
   if (!dailyResults[selectedStrategyId]) dailyResults[selectedStrategyId] = {};
@@ -856,8 +884,12 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
   bucket[dateKey] = byInstrument;
   saveDailyResults(dailyResults);
   if (currentUser) {
-    const p = persistDayResultToSupabase(currentUser.id, selectedStrategyId, dateKey, inst, entry).then(({ error }) => {
-      if (error) console.error('[Tagverse] Trade not synced to cloud (saved locally).', error.message);
+    const task = () => persistDayResultToSupabase(currentUser.id, sid, dateKey, inst, entry);
+    const p = task().then(({ error }) => {
+      if (error) {
+        console.error('[Tagverse] Trade not synced to cloud (saved locally).', error.message);
+        queueFailedCloudWrite(task);
+      }
     });
     trackCloudWrite(p);
   }
@@ -872,11 +904,25 @@ function clearDayLog(dateKey, instrument) {
       delete byDate[inst];
       if (Object.keys(byDate).length === 0) delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
-      if (currentUser) trackCloudWrite(deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
+      if (currentUser) {
+        const sid = selectedStrategyId;
+        const task = () => deleteDayResultFromSupabase(currentUser.id, sid, dateKey, inst);
+        const p = task().then(({ error }) => {
+          if (error) queueFailedCloudWrite(task);
+        });
+        trackCloudWrite(p);
+      }
     } else if (byDate) {
       delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
-      if (currentUser) trackCloudWrite(deleteDayResultFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
+      if (currentUser) {
+        const sid = selectedStrategyId;
+        const task = () => deleteDayResultFromSupabase(currentUser.id, sid, dateKey, inst);
+        const p = task().then(({ error }) => {
+          if (error) queueFailedCloudWrite(task);
+        });
+        trackCloudWrite(p);
+      }
     }
   }
   const bucketDc = declarations[selectedStrategyId];
@@ -886,11 +932,25 @@ function clearDayLog(dateKey, instrument) {
       delete declByDate[inst];
       if (Object.keys(declByDate).length === 0) delete bucketDc[dateKey];
       saveDeclarations(declarations);
-      if (currentUser) trackCloudWrite(deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
+      if (currentUser) {
+        const sid = selectedStrategyId;
+        const task = () => deleteDeclarationFromSupabase(currentUser.id, sid, dateKey, inst);
+        const p = task().then(({ error }) => {
+          if (error) queueFailedCloudWrite(task);
+        });
+        trackCloudWrite(p);
+      }
     } else if (declByDate) {
       delete bucketDc[dateKey];
       saveDeclarations(declarations);
-      if (currentUser) trackCloudWrite(deleteDeclarationFromSupabase(currentUser.id, selectedStrategyId, dateKey, inst));
+      if (currentUser) {
+        const sid = selectedStrategyId;
+        const task = () => deleteDeclarationFromSupabase(currentUser.id, sid, dateKey, inst);
+        const p = task().then(({ error }) => {
+          if (error) queueFailedCloudWrite(task);
+        });
+        trackCloudWrite(p);
+      }
     }
   }
 }
@@ -3816,6 +3876,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btn) btn.disabled = true;
     if (msg) msg.textContent = 'Syncing…';
     try {
+      if (failedCloudWrites.length > 0) {
+        if (msg) msg.textContent = 'Retrying failed writes…';
+        await retryFailedCloudWrites();
+        if (failedCloudWrites.length > 0) {
+          if (msg) msg.textContent = 'Some changes are still pending. Check connection and try again.';
+          if (btn) btn.disabled = false;
+          return;
+        }
+      }
       if (pendingCloudWrites.size > 0) {
         if (msg) msg.textContent = 'Finishing cloud writes…';
         await awaitPendingCloudWrites();
