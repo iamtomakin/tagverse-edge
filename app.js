@@ -523,10 +523,30 @@ async function pushSelectedStrategyCalendarToCloud(userId, strategyId) {
 
   // If everything succeeded, clear dirty keys for this strategy.
   if (errors === 0) {
-    for (const k of Array.from(dirtyDayDeleteKeys)) if (k.startsWith(prefix)) dirtyDayDeleteKeys.delete(k);
-    for (const k of Array.from(dirtyDayUpsertKeys)) if (k.startsWith(prefix)) dirtyDayUpsertKeys.delete(k);
-    for (const k of Array.from(dirtyDeclDeleteKeys)) if (k.startsWith(prefix)) dirtyDeclDeleteKeys.delete(k);
-    for (const k of Array.from(dirtyDeclUpsertKeys)) if (k.startsWith(prefix)) dirtyDeclUpsertKeys.delete(k);
+    for (const k of Array.from(dirtyDayDeleteKeys)) {
+      if (k.startsWith(prefix)) {
+        dirtyDayDeleteKeys.delete(k);
+        dirtyDayDeleteAt.delete(k);
+      }
+    }
+    for (const k of Array.from(dirtyDayUpsertKeys)) {
+      if (k.startsWith(prefix)) {
+        dirtyDayUpsertKeys.delete(k);
+        dirtyDayUpsertAt.delete(k);
+      }
+    }
+    for (const k of Array.from(dirtyDeclDeleteKeys)) {
+      if (k.startsWith(prefix)) {
+        dirtyDeclDeleteKeys.delete(k);
+        dirtyDeclDeleteAt.delete(k);
+      }
+    }
+    for (const k of Array.from(dirtyDeclUpsertKeys)) {
+      if (k.startsWith(prefix)) {
+        dirtyDeclUpsertKeys.delete(k);
+        dirtyDeclUpsertAt.delete(k);
+      }
+    }
   }
 
   return { ok: errors === 0, errors };
@@ -909,6 +929,10 @@ let dirtyDayUpsertKeys = new Set();
 let dirtyDayDeleteKeys = new Set();
 let dirtyDeclUpsertKeys = new Set();
 let dirtyDeclDeleteKeys = new Set();
+let dirtyDayUpsertAt = new Map();
+let dirtyDayDeleteAt = new Map();
+let dirtyDeclUpsertAt = new Map();
+let dirtyDeclDeleteAt = new Map();
 function trackCloudWrite(promise) {
   if (!promise || typeof promise.then !== 'function') return promise;
   pendingCloudWrites.add(promise);
@@ -941,13 +965,56 @@ async function retryFailedCloudWrites() {
   }
 }
 
+function pruneDirtyKeysByLastSync(lastSyncMs) {
+  const cutoff = Number.isFinite(lastSyncMs) ? lastSyncMs : 0;
+
+  for (const k of Array.from(dirtyDayUpsertKeys)) {
+    const ts = dirtyDayUpsertAt.get(k);
+    if (ts != null && ts <= cutoff) {
+      dirtyDayUpsertKeys.delete(k);
+      dirtyDayUpsertAt.delete(k);
+      dirtyDayDeleteKeys.delete(k);
+      dirtyDayDeleteAt.delete(k);
+    }
+  }
+  for (const k of Array.from(dirtyDayDeleteKeys)) {
+    const ts = dirtyDayDeleteAt.get(k);
+    if (ts != null && ts <= cutoff) {
+      dirtyDayDeleteKeys.delete(k);
+      dirtyDayDeleteAt.delete(k);
+      dirtyDayUpsertKeys.delete(k);
+      dirtyDayUpsertAt.delete(k);
+    }
+  }
+  for (const k of Array.from(dirtyDeclUpsertKeys)) {
+    const ts = dirtyDeclUpsertAt.get(k);
+    if (ts != null && ts <= cutoff) {
+      dirtyDeclUpsertKeys.delete(k);
+      dirtyDeclUpsertAt.delete(k);
+      dirtyDeclDeleteKeys.delete(k);
+      dirtyDeclDeleteAt.delete(k);
+    }
+  }
+  for (const k of Array.from(dirtyDeclDeleteKeys)) {
+    const ts = dirtyDeclDeleteAt.get(k);
+    if (ts != null && ts <= cutoff) {
+      dirtyDeclDeleteKeys.delete(k);
+      dirtyDeclDeleteAt.delete(k);
+      dirtyDeclUpsertKeys.delete(k);
+      dirtyDeclUpsertAt.delete(k);
+    }
+  }
+}
+
 function setDeclaration(dateKey, instrument, tradeCountPlanned) {
   const inst = instrument ?? selectedInstrument;
   const createdAt = new Date().toISOString();
   const sid = selectedStrategyId;
   const k = dayDirtyKey(sid, dateKey, inst);
   dirtyDeclUpsertKeys.add(k);
+  dirtyDeclUpsertAt.set(k, Date.now());
   dirtyDeclDeleteKeys.delete(k);
+  dirtyDeclDeleteAt.delete(k);
   if (!declarations[selectedStrategyId]) declarations[selectedStrategyId] = {};
   const bucket = declarations[selectedStrategyId];
   const existing = bucket[dateKey];
@@ -972,7 +1039,9 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
   const sid = selectedStrategyId;
   const k = dayDirtyKey(sid, dateKey, inst);
   dirtyDayUpsertKeys.add(k);
+  dirtyDayUpsertAt.set(k, Date.now());
   dirtyDayDeleteKeys.delete(k);
+  dirtyDayDeleteAt.delete(k);
   const entry = { totalR, tradeCount };
   if (tradeCount === 1) entry.trade_1_r = totalR;
   if (!dailyResults[selectedStrategyId]) dailyResults[selectedStrategyId] = {};
@@ -1006,7 +1075,9 @@ function clearDayLog(dateKey, instrument) {
       if (Object.keys(byDate).length === 0) delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
       dirtyDayDeleteKeys.add(k);
+      dirtyDayDeleteAt.set(k, Date.now());
       dirtyDayUpsertKeys.delete(k);
+      dirtyDayUpsertAt.delete(k);
       if (currentUser) {
         const task = () => deleteDayResultFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
@@ -1018,7 +1089,9 @@ function clearDayLog(dateKey, instrument) {
       delete bucketDr[dateKey];
       saveDailyResults(dailyResults);
       dirtyDayDeleteKeys.add(k);
+      dirtyDayDeleteAt.set(k, Date.now());
       dirtyDayUpsertKeys.delete(k);
+      dirtyDayUpsertAt.delete(k);
       if (currentUser) {
         const task = () => deleteDayResultFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
@@ -1036,7 +1109,9 @@ function clearDayLog(dateKey, instrument) {
       if (Object.keys(declByDate).length === 0) delete bucketDc[dateKey];
       saveDeclarations(declarations);
       dirtyDeclDeleteKeys.add(k);
+      dirtyDeclDeleteAt.set(k, Date.now());
       dirtyDeclUpsertKeys.delete(k);
+      dirtyDeclUpsertAt.delete(k);
       if (currentUser) {
         const task = () => deleteDeclarationFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
@@ -1048,7 +1123,9 @@ function clearDayLog(dateKey, instrument) {
       delete bucketDc[dateKey];
       saveDeclarations(declarations);
       dirtyDeclDeleteKeys.add(k);
+      dirtyDeclDeleteAt.set(k, Date.now());
       dirtyDeclUpsertKeys.delete(k);
+      dirtyDeclUpsertAt.delete(k);
       if (currentUser) {
         const task = () => deleteDeclarationFromSupabase(currentUser.id, sid, dateKey, inst);
         const p = task().then(({ error }) => {
@@ -3999,6 +4076,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (msg) msg.textContent = 'Sign in first.';
       return;
     }
+
+    // Drop dirty keys older than the last successful sync on THIS device.
+    // This prevents device B from re-uploading stale local cells after device A deletes them.
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.lastCalendarSyncAt);
+      const lastSyncMs = raw ? Number(raw) : 0;
+      pruneDirtyKeysByLastSync(lastSyncMs);
+    } catch (_) {}
+
     if (btn) btn.disabled = true;
     if (msg) msg.textContent = 'Syncing…';
     try {
