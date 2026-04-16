@@ -310,6 +310,31 @@ function migrateDeclarations(data) {
   return changed ? out : data;
 }
 
+/** Read one instrument cell from local daily results (handles legacy per-day shape). */
+function getLocalDayCellEntry(localResults, sid, dateKey, inst) {
+  const byDate = localResults?.[sid]?.[dateKey];
+  if (!byDate || typeof byDate !== 'object') return null;
+  if (isLegacyDailyEntry(byDate)) {
+    if (inst !== DEFAULT_INSTRUMENT) return null;
+    const entry = { totalR: byDate.totalR, tradeCount: byDate.tradeCount };
+    if (byDate.trade_1_r != null) entry.trade_1_r = byDate.trade_1_r;
+    return entry;
+  }
+  const cell = byDate[inst];
+  return cell && typeof cell === 'object' ? cell : null;
+}
+
+function getLocalDeclCellEntry(localDeclarations, sid, dateKey, inst) {
+  const byDate = localDeclarations?.[sid]?.[dateKey];
+  if (!byDate || typeof byDate !== 'object') return null;
+  if (isLegacyDeclarationEntry(byDate)) {
+    if (inst !== DEFAULT_INSTRUMENT) return null;
+    return { tradeCountPlanned: byDate.tradeCountPlanned, createdAt: byDate.createdAt };
+  }
+  const cell = byDate[inst];
+  return cell && typeof cell === 'object' ? cell : null;
+}
+
 const SAMPLE_DAILY_PL = {
   '2026-03-02': { amount: -622.88, trades: 2 },
   '2026-03-03': { amount: -200.00, trades: 1 },
@@ -493,7 +518,7 @@ async function pushSelectedStrategyCalendarToCloud(userId, strategyId) {
     const parts = parseDayDirtyKey(k);
     const dateKey = parts[1];
     const inst = parts[2];
-    const entry = dailyResults?.[strategyId]?.[dateKey]?.[inst];
+    const entry = getLocalDayCellEntry(dailyResults, strategyId, dateKey, inst);
     if (!entry || typeof entry !== 'object') {
       const { error } = await deleteDayResultFromSupabase(userId, strategyId, dateKey, inst);
       if (error) errors++;
@@ -519,7 +544,7 @@ async function pushSelectedStrategyCalendarToCloud(userId, strategyId) {
     const parts = parseDayDirtyKey(k);
     const dateKey = parts[1];
     const inst = parts[2];
-    const entry = declarations?.[strategyId]?.[dateKey]?.[inst];
+    const entry = getLocalDeclCellEntry(declarations, strategyId, dateKey, inst);
     if (!entry || typeof entry !== 'object') {
       const { error } = await deleteDeclarationFromSupabase(userId, strategyId, dateKey, inst);
       if (error) errors++;
@@ -574,16 +599,33 @@ function saveDeclarations(data) {
   } catch (_) {}
 }
 
+const SUPABASE_LIST_PAGE_SIZE = 1000;
+
 async function fetchDailyResultsFromSupabase(userId) {
   const supa = initSupabase();
   if (!supa) return {};
-  const { data: rows, error } = await supa.from('daily_results').select('strategy_id, date_key, instrument, total_r, trade_count, trade_1_r').eq('user_id', userId);
-  if (error) {
-    console.error('[Tagverse] fetch daily_results failed:', error.message, error);
-    return {};
+  const columns = 'strategy_id, date_key, instrument, total_r, trade_count, trade_1_r';
+  let from = 0;
+  const allRows = [];
+  while (true) {
+    const { data: rows, error } = await supa
+      .from('daily_results')
+      .select(columns)
+      .eq('user_id', userId)
+      .order('date_key', { ascending: true })
+      .order('instrument', { ascending: true })
+      .range(from, from + SUPABASE_LIST_PAGE_SIZE - 1);
+    if (error) {
+      console.error('[Tagverse] fetch daily_results failed:', error.message, error);
+      return {};
+    }
+    const batch = rows || [];
+    allRows.push(...batch);
+    if (batch.length < SUPABASE_LIST_PAGE_SIZE) break;
+    from += SUPABASE_LIST_PAGE_SIZE;
   }
   const out = {};
-  (rows || []).forEach((r) => {
+  allRows.forEach((r) => {
     const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
     if (!out[sid]) out[sid] = {};
     if (!out[sid][r.date_key]) out[sid][r.date_key] = {};
@@ -600,13 +642,28 @@ async function fetchDailyResultsFromSupabase(userId) {
 async function fetchDeclarationsFromSupabase(userId) {
   const supa = initSupabase();
   if (!supa) return {};
-  const { data: rows, error } = await supa.from('declarations').select('strategy_id, date_key, instrument, trade_count_planned, created_at').eq('user_id', userId);
-  if (error) {
-    console.error('[Tagverse] fetch declarations failed:', error.message, error);
-    return {};
+  const columns = 'strategy_id, date_key, instrument, trade_count_planned, created_at';
+  let from = 0;
+  const allRows = [];
+  while (true) {
+    const { data: rows, error } = await supa
+      .from('declarations')
+      .select(columns)
+      .eq('user_id', userId)
+      .order('date_key', { ascending: true })
+      .order('instrument', { ascending: true })
+      .range(from, from + SUPABASE_LIST_PAGE_SIZE - 1);
+    if (error) {
+      console.error('[Tagverse] fetch declarations failed:', error.message, error);
+      return {};
+    }
+    const batch = rows || [];
+    allRows.push(...batch);
+    if (batch.length < SUPABASE_LIST_PAGE_SIZE) break;
+    from += SUPABASE_LIST_PAGE_SIZE;
   }
   const out = {};
-  (rows || []).forEach((r) => {
+  allRows.forEach((r) => {
     const sid = r.strategy_id || STRATEGY_DEFAULT_ID;
     if (!out[sid]) out[sid] = {};
     if (!out[sid][r.date_key]) out[sid][r.date_key] = {};
@@ -1020,7 +1077,7 @@ function reconcileRestoredCalendarDirtyKeys() {
     const sid = parts[0];
     const dateKey = parts[1];
     const inst = parts[2];
-    const entry = dailyResults?.[sid]?.[dateKey]?.[inst];
+    const entry = getLocalDayCellEntry(dailyResults, sid, dateKey, inst);
     if (!entry || typeof entry !== 'object') {
       dirtyDayUpsertKeys.delete(k);
       dirtyDayUpsertAt.delete(k);
@@ -1031,7 +1088,7 @@ function reconcileRestoredCalendarDirtyKeys() {
     const sid = parts[0];
     const dateKey = parts[1];
     const inst = parts[2];
-    const entry = declarations?.[sid]?.[dateKey]?.[inst];
+    const entry = getLocalDeclCellEntry(declarations, sid, dateKey, inst);
     if (!entry || typeof entry !== 'object') {
       dirtyDeclUpsertKeys.delete(k);
       dirtyDeclUpsertAt.delete(k);
@@ -1154,7 +1211,7 @@ function applyDirtyOverlayToCalendarData(remoteResults, remoteDeclarations, loca
   // Apply local upserts that haven't been synced yet.
   for (const k of Array.from(dirtyDayUpsertKeys)) {
     const [sid, dateKey, inst] = parseDayDirtyKey(k);
-    const entry = localResults?.[sid]?.[dateKey]?.[inst];
+    const entry = getLocalDayCellEntry(localResults, sid, dateKey, inst);
     if (!entry || typeof entry !== 'object') continue;
     if (!outResults[sid]) outResults[sid] = {};
     if (!outResults[sid][dateKey]) outResults[sid][dateKey] = {};
@@ -1162,7 +1219,7 @@ function applyDirtyOverlayToCalendarData(remoteResults, remoteDeclarations, loca
   }
   for (const k of Array.from(dirtyDeclUpsertKeys)) {
     const [sid, dateKey, inst] = parseDayDirtyKey(k);
-    const entry = localDeclarations?.[sid]?.[dateKey]?.[inst];
+    const entry = getLocalDeclCellEntry(localDeclarations, sid, dateKey, inst);
     if (!entry || typeof entry !== 'object') continue;
     if (!outDecl[sid]) outDecl[sid] = {};
     if (!outDecl[sid][dateKey]) outDecl[sid][dateKey] = {};
