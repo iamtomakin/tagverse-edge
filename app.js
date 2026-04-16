@@ -18,7 +18,22 @@
  * ---------------------------------------------------------------------------
  */
 
-const STORAGE_KEYS = { dailyResults: 'tagverse_daily_results', declarations: 'tagverse_declarations', theme: 'tagverse_theme', shareTokens: 'tagverse_share_tokens', selectedInstrument: 'tagverse_selected_instrument', mode: 'tagverse_mode', strategies: 'tagverse_strategies', selectedStrategy: 'tagverse_selected_strategy', journalEntries: 'tagverse_journal_entries', journalOptions: 'tagverse_journal_options', logROptions: 'tagverse_log_r_options', lastCalendarSyncAt: 'tagverse_last_calendar_sync_at' };
+const STORAGE_KEYS = {
+  dailyResults: 'tagverse_daily_results',
+  declarations: 'tagverse_declarations',
+  theme: 'tagverse_theme',
+  shareTokens: 'tagverse_share_tokens',
+  selectedInstrument: 'tagverse_selected_instrument',
+  mode: 'tagverse_mode',
+  strategies: 'tagverse_strategies',
+  selectedStrategy: 'tagverse_selected_strategy',
+  journalEntries: 'tagverse_journal_entries',
+  journalOptions: 'tagverse_journal_options',
+  logROptions: 'tagverse_log_r_options',
+  lastCalendarSyncAt: 'tagverse_last_calendar_sync_at',
+  /** In-memory dirty calendar keys mirrored here so reload/new tab keeps pending upload + overlay merge. */
+  calendarPendingDirty: 'tagverse_calendar_pending_dirty',
+};
 
 const STRATEGY_DEFAULT_ID = 'default';
 
@@ -549,6 +564,7 @@ async function pushSelectedStrategyCalendarToCloud(userId, strategyId) {
     }
   }
 
+  persistCalendarDirtyKeys();
   return { ok: errors === 0, errors };
 }
 
@@ -813,6 +829,7 @@ function flushAllLocalDataToStorage() {
     saveSelectedInstrument(selectedInstrument);
     saveCurrentMode(currentMode);
     saveLogROptions(loadLogROptions(), { skipSync: true });
+    persistCalendarDirtyKeys();
   } catch (e) {
     console.error('[Tagverse] flush local storage failed', e);
   }
@@ -951,6 +968,111 @@ let dirtyDayUpsertAt = new Map();
 let dirtyDayDeleteAt = new Map();
 let dirtyDeclUpsertAt = new Map();
 let dirtyDeclDeleteAt = new Map();
+
+function persistCalendarDirtyKeys() {
+  try {
+    const payload = {
+      v: 1,
+      dayUpsert: [...dirtyDayUpsertKeys].map((k) => [k, dirtyDayUpsertAt.get(k) ?? 0]),
+      dayDelete: [...dirtyDayDeleteKeys].map((k) => [k, dirtyDayDeleteAt.get(k) ?? 0]),
+      declUpsert: [...dirtyDeclUpsertKeys].map((k) => [k, dirtyDeclUpsertAt.get(k) ?? 0]),
+      declDelete: [...dirtyDeclDeleteKeys].map((k) => [k, dirtyDeclDeleteAt.get(k) ?? 0]),
+    };
+    if (
+      payload.dayUpsert.length === 0 &&
+      payload.dayDelete.length === 0 &&
+      payload.declUpsert.length === 0 &&
+      payload.declDelete.length === 0
+    ) {
+      localStorage.removeItem(STORAGE_KEYS.calendarPendingDirty);
+      return;
+    }
+    localStorage.setItem(STORAGE_KEYS.calendarPendingDirty, JSON.stringify(payload));
+  } catch (_) {}
+}
+
+/** If timestamps are <= last sync (clock skew), bump so pruneDirtyKeysByLastSync does not drop pending edits. */
+function bumpRestoredDirtyTimestampsPastLastSync() {
+  let raw;
+  try {
+    raw = localStorage.getItem(STORAGE_KEYS.lastCalendarSyncAt);
+  } catch (_) {
+    raw = null;
+  }
+  const lastSyncMs = raw ? Number(raw) : 0;
+  const floor = Number.isFinite(lastSyncMs) ? lastSyncMs : 0;
+  const bump = (set, map) => {
+    for (const k of Array.from(set)) {
+      const ts = map.get(k);
+      if (ts != null && ts <= floor) map.set(k, floor + 1);
+    }
+  };
+  bump(dirtyDayUpsertKeys, dirtyDayUpsertAt);
+  bump(dirtyDayDeleteKeys, dirtyDayDeleteAt);
+  bump(dirtyDeclUpsertKeys, dirtyDeclUpsertAt);
+  bump(dirtyDeclDeleteKeys, dirtyDeclDeleteAt);
+}
+
+/** Drop restored upsert keys whose cell no longer exists in local calendar data. */
+function reconcileRestoredCalendarDirtyKeys() {
+  for (const k of Array.from(dirtyDayUpsertKeys)) {
+    const parts = parseDayDirtyKey(k);
+    const sid = parts[0];
+    const dateKey = parts[1];
+    const inst = parts[2];
+    const entry = dailyResults?.[sid]?.[dateKey]?.[inst];
+    if (!entry || typeof entry !== 'object') {
+      dirtyDayUpsertKeys.delete(k);
+      dirtyDayUpsertAt.delete(k);
+    }
+  }
+  for (const k of Array.from(dirtyDeclUpsertKeys)) {
+    const parts = parseDayDirtyKey(k);
+    const sid = parts[0];
+    const dateKey = parts[1];
+    const inst = parts[2];
+    const entry = declarations?.[sid]?.[dateKey]?.[inst];
+    if (!entry || typeof entry !== 'object') {
+      dirtyDeclUpsertKeys.delete(k);
+      dirtyDeclUpsertAt.delete(k);
+    }
+  }
+}
+
+function loadCalendarDirtyKeysFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.calendarPendingDirty);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || parsed.v !== 1) return;
+
+    const ingest = (arr, set, map) => {
+      set.clear();
+      map.clear();
+      if (!Array.isArray(arr)) return;
+      for (const row of arr) {
+        if (!Array.isArray(row) || row.length < 2) continue;
+        const k = row[0];
+        const ts = Number(row[1]);
+        if (typeof k !== 'string' || !Number.isFinite(ts)) continue;
+        set.add(k);
+        map.set(k, ts);
+      }
+    };
+
+    ingest(parsed.dayUpsert, dirtyDayUpsertKeys, dirtyDayUpsertAt);
+    ingest(parsed.dayDelete, dirtyDayDeleteKeys, dirtyDayDeleteAt);
+    ingest(parsed.declUpsert, dirtyDeclUpsertKeys, dirtyDeclUpsertAt);
+    ingest(parsed.declDelete, dirtyDeclDeleteKeys, dirtyDeclDeleteAt);
+
+    reconcileRestoredCalendarDirtyKeys();
+    bumpRestoredDirtyTimestampsPastLastSync();
+    persistCalendarDirtyKeys();
+  } catch (_) {}
+}
+
+loadCalendarDirtyKeysFromStorage();
+
 function trackCloudWrite(promise) {
   if (!promise || typeof promise.then !== 'function') return promise;
   pendingCloudWrites.add(promise);
@@ -1022,6 +1144,7 @@ function pruneDirtyKeysByLastSync(lastSyncMs) {
       dirtyDeclUpsertAt.delete(k);
     }
   }
+  persistCalendarDirtyKeys();
 }
 
 function applyDirtyOverlayToCalendarData(remoteResults, remoteDeclarations, localResults, localDeclarations) {
@@ -1093,6 +1216,7 @@ function setDeclaration(dateKey, instrument, tradeCountPlanned) {
     });
     trackCloudWrite(p);
   }
+  persistCalendarDirtyKeys();
 }
 
 function setDayResult(dateKey, instrument, totalR, tradeCount) {
@@ -1122,6 +1246,7 @@ function setDayResult(dateKey, instrument, totalR, tradeCount) {
     });
     trackCloudWrite(p);
   }
+  persistCalendarDirtyKeys();
 }
 
 function clearDayLog(dateKey, instrument) {
@@ -1196,6 +1321,7 @@ function clearDayLog(dateKey, instrument) {
       }
     }
   }
+  persistCalendarDirtyKeys();
 }
 
 function computeDisciplineStreak(instrument) {
