@@ -8,6 +8,10 @@
 
 **localStorage** = temporary cache only, never authoritative. Optional; it must not quietly become a second source of truth. Reconcile from Supabase after sign-in; don’t prefer cache over server for domain data.
 
+### Analytics (win rate, streaks, drawdown)
+
+See [`docs/ANALYTICS.md`](docs/ANALYTICS.md) for how win rate and related stats are calculated, including **breakeven days**, weekends, and empty days.
+
 ---
 
 ## Deployment (Vercel)

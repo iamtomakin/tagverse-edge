@@ -167,7 +167,7 @@ NQ, NY open only (no instrument/session picker in v1). Max 1 or 2 trades per day
 ### J4: Share snapshot (MVP)
 
 1. From dashboard or analytics → “Share”.
-2. Choose period (e.g. this month).
+2. Choose period (e.g. this period or a selected range).
 3. Get link or image: calendar thumbnail + streak + score + key metrics.
 4. Share link; recipient views read-only, no login.
 
@@ -193,7 +193,7 @@ NQ, NY open only (no instrument/session picker in v1). Max 1 or 2 trades per day
 ### Screen 3: Analytics (basic)
 
 - **Metrics:** Win rate, average R, green day % (and total R for period).
-- **Period:** This month, last 30 days, or custom (MVP: this month + last 30).
+- **Period:** This period, last 30 days, or custom (MVP: calendar month + last 30).
 - **Charts:** Optional simple bar or list; avoid heavy charts in MVP.
 
 ### Screen 4: Shareable snapshot
@@ -299,7 +299,7 @@ Avoid: event bus, message queues, multiple DBs, “platform” abstractions. Add
 - **MVP = 8 features only.** Anything else is backlog. No “quick” risk-of-ruin or community benchmark in v1.
 - **One R model.** Don’t support multiple instruments or sessions in MVP; no “strategies” or “portfolios.”
 - **Declaration = 1 or 2 trades.** No max R, breakeven, or session time in MVP.
-- **Analytics = one screen.** No dashboards per strategy, no custom date ranges beyond “this month” and “last 30 days” if needed.
+- **Analytics = one screen.** No dashboards per strategy, no custom date ranges beyond a preset period and last 30 days if needed.
 - **Share = one format.** One snapshot layout; no templates or white-label in v1.
 - **Score = one formula.** Ship one discipline score; refine later with data.
 - **No realtime.** Poll or refetch after log; no WebSockets for MVP.

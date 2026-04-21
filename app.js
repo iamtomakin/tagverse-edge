@@ -239,8 +239,8 @@ function renameStrategy(id, newName) {
   }
   renderStrategyPills();
   renderCalendar();
-  renderDailyLogScreen();
   if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
   if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
 }
 
@@ -261,8 +261,8 @@ function deleteStrategy(id) {
   strategies = loadStrategies();
   renderStrategyPills();
   renderCalendar();
-  renderDailyLogScreen();
   if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
   if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
   scheduleProfilePreferencesSync();
 }
@@ -333,6 +333,686 @@ function getLocalDeclCellEntry(localDeclarations, sid, dateKey, inst) {
   }
   const cell = byDate[inst];
   return cell && typeof cell === 'object' ? cell : null;
+}
+
+/**
+ * Strategy-level stats for forecasting from logged end-of-day data.
+ * Aggregates across all instruments for the strategy (weekday rows only).
+ * @param {string|null} startDateKey inclusive YYYY-MM-DD, or null for no lower bound
+ * @param {string|null} endDateKey inclusive YYYY-MM-DD, or null for no upper bound
+ */
+function getStrategyForecastStatsInRange(strategyId, startDateKey, endDateKey) {
+  if (!strategyId) return null;
+  const strategy = (strategies || []).find((s) => s.id === strategyId) || { id: strategyId, name: strategyId };
+  const useRange =
+    startDateKey != null &&
+    endDateKey != null &&
+    /^\d{4}-\d{2}-\d{2}$/.test(String(startDateKey)) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(String(endDateKey)) &&
+    String(startDateKey) <= String(endDateKey);
+  if (startDateKey != null && endDateKey != null && !useRange) return null;
+
+  const bucket = dailyResults?.[strategyId];
+  if (!bucket || typeof bucket !== 'object') {
+    return {
+      strategyId,
+      strategyName: strategy.name,
+      winRate: 0,
+      avgRiskReward: null,
+      avgTradesPerDay: null,
+      avgRiskPerTrade: null,
+      totalTrades: 0,
+      sampleDays: 0,
+      confidenceLevel: 'low',
+      days: [],
+      periodStartDateKey: useRange ? String(startDateKey) : null,
+      periodEndDateKey: useRange ? String(endDateKey) : null
+    };
+  }
+
+  const rows = [];
+  const keys = Object.keys(bucket).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+  for (const dateKey of keys) {
+    if (useRange && (dateKey < String(startDateKey) || dateKey > String(endDateKey))) continue;
+    const parts = dateKey.split('-').map(Number);
+    const d = new Date(parts[0], parts[1] - 1, parts[2]);
+    if (!isWeekday(d)) continue;
+
+    const byDate = bucket[dateKey];
+    if (!byDate || typeof byDate !== 'object') continue;
+
+    let totalR = 0;
+    let tradeCount = 0;
+    if (isLegacyDailyEntry(byDate)) {
+      totalR = Number(byDate.totalR) || 0;
+      tradeCount = Number(byDate.tradeCount) || 1;
+    } else {
+      for (const inst of Object.keys(byDate)) {
+        const entry = byDate[inst];
+        if (!entry || typeof entry !== 'object') continue;
+        totalR += Number(entry.totalR) || 0;
+        const tc = Number(entry.tradeCount);
+        tradeCount += Number.isFinite(tc) && tc > 0 ? tc : 1;
+      }
+    }
+    if (tradeCount <= 0) tradeCount = 1;
+    rows.push({ dateKey, totalR, tradeCount });
+  }
+
+  const sampleDays = rows.length;
+  const totalTrades = rows.reduce((s, r) => s + r.tradeCount, 0);
+  const winning = rows.filter((r) => r.totalR > 0);
+  const losing = rows.filter((r) => r.totalR < 0);
+  const winRate = sampleDays ? (winning.length / sampleDays) * 100 : 0;
+  const avgTradesPerDay = sampleDays ? totalTrades / sampleDays : null;
+
+  let avgRiskReward = null;
+  if (winning.length && losing.length) {
+    const avgWin = winning.reduce((s, r) => s + r.totalR, 0) / winning.length;
+    const avgLossAbs = Math.abs(losing.reduce((s, r) => s + r.totalR, 0) / losing.length);
+    if (avgLossAbs > 0) avgRiskReward = avgWin / avgLossAbs;
+  }
+
+  const perTradeLossRisk = losing
+    .map((r) => Math.abs(r.totalR) / Math.max(1, r.tradeCount))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const avgRiskPerTrade = perTradeLossRisk.length
+    ? perTradeLossRisk.reduce((s, n) => s + n, 0) / perTradeLossRisk.length
+    : null;
+
+  const confidenceLevel = sampleDays >= 60 ? 'high' : sampleDays >= 20 ? 'moderate' : 'low';
+
+  return {
+    strategyId,
+    strategyName: strategy.name,
+    winRate,
+    avgRiskReward,
+    avgTradesPerDay,
+    avgRiskPerTrade,
+    totalTrades,
+    sampleDays,
+    confidenceLevel,
+    days: rows,
+    periodStartDateKey: useRange ? String(startDateKey) : null,
+    periodEndDateKey: useRange ? String(endDateKey) : null
+  };
+}
+
+/** All-time weekday stats (no date filter). */
+function getStrategyForecastStats(strategyId) {
+  return getStrategyForecastStatsInRange(strategyId, null, null);
+}
+
+// --- Funded Account Planner (forward-looking scenario; not the historical Evaluation Account planner flow) ---
+
+/**
+ * EV in R units per trade: wins pay RR·R, losses pay −R → E = w·RR − (1−w).
+ * @param {number} winRate01 0–1
+ * @param {number} riskRewardRatio
+ */
+function fundedPlannerExpectedValuePerTradeR(winRate01, riskRewardRatio) {
+  const w = Number(winRate01);
+  const rr = Number(riskRewardRatio);
+  if (!Number.isFinite(w) || !Number.isFinite(rr)) return NaN;
+  return w * rr - (1 - w);
+}
+
+/**
+ * Rough upper bound on longest losing run in n i.i.d. trials (heuristic, not Monte Carlo).
+ */
+function fundedPlannerApproxMaxLosingStreak(totalTrades, winRate01) {
+  const n = Number(totalTrades);
+  const w = Number(winRate01);
+  if (!Number.isFinite(n) || n < 1) return 0;
+  if (!Number.isFinite(w) || w <= 0 || w >= 1) return NaN;
+  const pLoss = 1 - w;
+  return Math.log(n) / Math.log(1 / pLoss);
+}
+
+/**
+ * Simple severity → fleet heuristic: if streak loss exceeds one account's max DD, scale "at risk" count.
+ */
+/**
+ * P(at least one run of k consecutive losses) in n i.i.d. trades; win rate = fraction of wins per trade.
+ */
+function fundedPlannerProbabilityAtLeastKConsecutiveLosses(numTrials, winRate01, k) {
+  const n = Math.floor(Number(numTrials));
+  const w = Number(winRate01);
+  const streakLen = Math.floor(Number(k));
+  if (n < 1 || streakLen < 1 || !Number.isFinite(w) || w <= 0 || w >= 1) return null;
+  if (streakLen > n) return 0;
+  const pWin = w;
+  const pLoss = 1 - w;
+  let v = new Array(streakLen).fill(0);
+  v[0] = 1;
+  for (let i = 0; i < n; i++) {
+    let sumV = 0;
+    for (let j = 0; j < streakLen; j++) sumV += v[j];
+    const nv = new Array(streakLen).fill(0);
+    nv[0] = pWin * sumV;
+    for (let j = 0; j < streakLen - 1; j++) {
+      nv[j + 1] = pLoss * v[j];
+    }
+    v = nv;
+  }
+  let sumEnd = 0;
+  for (let j = 0; j < streakLen; j++) sumEnd += v[j];
+  return Math.min(1, Math.max(0, 1 - sumEnd));
+}
+
+/** Risk $ as % of drawdown limit; drives conservative → extreme band. */
+function fundedPlannerAccountRiskPresentation(riskPerTrade, drawdownDollars) {
+  const r = Number(riskPerTrade);
+  const dd = Number(drawdownDollars);
+  if (!Number.isFinite(r) || r <= 0 || !Number.isFinite(dd) || dd <= 0) {
+    return { pct: null, tag: '—', band: 'neutral', valueTone: 'muted' };
+  }
+  const pct = (r / dd) * 100;
+  if (pct <= 4) return { pct, tag: 'Conservative', band: 'conservative', valueTone: 'safe' };
+  if (pct <= 8) return { pct, tag: 'Moderate', band: 'moderate', valueTone: 'caution' };
+  if (pct <= 12) return { pct, tag: 'Aggressive', band: 'aggressive', valueTone: 'warn' };
+  return { pct, tag: 'Extreme', band: 'extreme', valueTone: 'extreme' };
+}
+
+function fundedPlannerEstimateBreachHeuristic(streakLossDollars, maxDrawdownPerAccount, numberOfAccounts) {
+  const maxDd = Number(maxDrawdownPerAccount);
+  const n = Math.max(1, Math.floor(Number(numberOfAccounts) || 1));
+  const loss = Number(streakLossDollars);
+  if (!Number.isFinite(maxDd) || maxDd <= 0 || !Number.isFinite(loss) || loss < 0) {
+    return {
+      highBreachRisk: false,
+      severityRatio: null,
+      accountsAtRisk: 0,
+      survivalRatePercent: 100
+    };
+  }
+  const severityRatio = loss / maxDd;
+  const highBreachRisk = severityRatio > 1;
+  let accountsAtRisk = 0;
+  let survivalRatePercent = 100;
+  if (severityRatio > 1) {
+    const fracAtRisk = Math.min(1, (severityRatio - 1) / severityRatio);
+    accountsAtRisk = Math.max(1, Math.min(n, Math.round(n * fracAtRisk)));
+    survivalRatePercent = Math.max(0, Math.round((100 * (n - accountsAtRisk)) / n));
+  }
+  return { highBreachRisk, severityRatio, accountsAtRisk, survivalRatePercent };
+}
+
+/**
+ * @param {object} raw — numberOfAccounts, riskPerTrade, tradesPerDay, winRatePercent, riskRewardRatio, tradingDaysPerMonth, maxDrawdownPerAccount (drawdown limit $)
+ */
+function validateFundedPlannerInputs(raw) {
+  const n = Number(raw.numberOfAccounts);
+  const risk = Number(raw.riskPerTrade);
+  const tpd = Number(raw.tradesPerDay);
+  const wr = Number(raw.winRatePercent);
+  const rr = Number(raw.riskRewardRatio);
+  const tdm = Number(raw.tradingDaysPerMonth);
+  const maxDd = Number(raw.maxDrawdownPerAccount);
+
+  if (!Number.isFinite(n) || n < 1 || n > 500) {
+    return { ok: false, error: 'Number of accounts must be between 1 and 500.' };
+  }
+  if (!Number.isFinite(risk) || risk <= 0) {
+    return { ok: false, error: 'Risk per trade ($) must be greater than 0.' };
+  }
+  if (!Number.isFinite(tpd) || tpd < 0) {
+    return { ok: false, error: 'Trades per day cannot be negative.' };
+  }
+  if (!Number.isFinite(wr) || wr <= 0 || wr >= 100) {
+    return { ok: false, error: 'Win rate must be between 0 and 100 (exclusive) for this projection.' };
+  }
+  if (!Number.isFinite(rr) || rr < 0) {
+    return { ok: false, error: 'Risk/reward must be zero or positive.' };
+  }
+  if (!Number.isFinite(tdm) || tdm < 1 || tdm > 31) {
+    return { ok: false, error: 'Trading days per month must be between 1 and 31.' };
+  }
+  if (!Number.isFinite(maxDd) || maxDd <= 0) {
+    return { ok: false, error: 'Drawdown limit must be greater than 0.' };
+  }
+  const totalTrades = tpd * tdm;
+  if (!Number.isFinite(totalTrades) || totalTrades < 1) {
+    return { ok: false, error: 'Monthly trade count must be at least 1 — adjust trades per day or trading days.' };
+  }
+
+  return {
+    ok: true,
+    data: {
+      numberOfAccounts: Math.floor(n),
+      riskPerTrade: risk,
+      tradesPerDay: tpd,
+      winRatePercent: wr,
+      riskRewardRatio: rr,
+      tradingDaysPerMonth: Math.floor(tdm),
+      maxDrawdownPerAccount: maxDd,
+      totalTrades
+    }
+  };
+}
+
+function computeFundedAccountPlannerScenario(raw) {
+  const v = validateFundedPlannerInputs(raw);
+  if (!v.ok) return { ok: false, error: v.error };
+
+  const d = v.data;
+  const w = d.winRatePercent / 100;
+  const evR = fundedPlannerExpectedValuePerTradeR(w, d.riskRewardRatio);
+  if (!Number.isFinite(evR)) {
+    return { ok: false, error: 'Could not compute expected value from inputs.' };
+  }
+
+  const expectedProfitPerTrade = d.riskPerTrade * evR;
+  const totalTrades = d.totalTrades;
+  const profitPerAccount = expectedProfitPerTrade * totalTrades;
+  const totalProfit = profitPerAccount * d.numberOfAccounts;
+
+  const streakApprox = fundedPlannerApproxMaxLosingStreak(totalTrades, w);
+  if (!Number.isFinite(streakApprox)) {
+    return { ok: false, error: 'Streak estimate could not be computed — check win rate.' };
+  }
+  const streakRounded = Math.max(0, streakApprox);
+  const streakLossDollars = streakRounded * d.riskPerTrade;
+  const breach = fundedPlannerEstimateBreachHeuristic(streakLossDollars, d.maxDrawdownPerAccount, d.numberOfAccounts);
+
+  return {
+    ok: true,
+    inputs: d,
+    earnings: {
+      expectedValuePerTradeR: evR,
+      expectedProfitPerTrade,
+      totalTrades,
+      profitPerAccount,
+      totalProfit
+    },
+    risk: {
+      maxLosingStreakApprox: streakRounded,
+      streakLossDollars,
+      ...breach
+    }
+  };
+}
+
+/**
+ * Sum totalR (+ tradeCount) for one strategy day from dailyResults bucket (all instruments).
+ * Returns null if there is no row for dateKey.
+ */
+function getStrategyDayTotalRFromBucket(bucket, dateKey) {
+  if (!bucket || typeof bucket !== 'object') return null;
+  const byDate = bucket[dateKey];
+  if (!byDate || typeof byDate !== 'object') return null;
+  let totalR = 0;
+  let tradeCount = 0;
+  if (isLegacyDailyEntry(byDate)) {
+    totalR = Number(byDate.totalR) || 0;
+    tradeCount = Number(byDate.tradeCount) || 1;
+  } else {
+    for (const inst of Object.keys(byDate)) {
+      const entry = byDate[inst];
+      if (!entry || typeof entry !== 'object') continue;
+      totalR += Number(entry.totalR) || 0;
+      const tc = Number(entry.tradeCount);
+      tradeCount += Number.isFinite(tc) && tc > 0 ? tc : 1;
+    }
+  }
+  if (tradeCount <= 0) tradeCount = 1;
+  return { totalR, tradeCount };
+}
+
+const PROP_EVAL_MAX_RANGE_DAYS = 400;
+
+/**
+ * Performance over a date range from logged dailyResults (EOD only). Weekdays with a calendar row only.
+ * dollarsPerR: $ earned per 1R for the account (maps logged R to $).
+ * startDateKey / endDateKey: inclusive YYYY-MM-DD bounds.
+ */
+function aggregateStrategyPerformanceInRange(strategyId, startDateKey, endDateKey, dollarsPerR, startingBalance) {
+  const dr = Number(dollarsPerR);
+  const startBal = Number(startingBalance);
+  if (!strategyId || !/^\d{4}-\d{2}-\d{2}$/.test(String(startDateKey || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(endDateKey || ''))) {
+    return { error: 'invalid_scope' };
+  }
+  if (!Number.isFinite(dr) || dr <= 0 || !Number.isFinite(startBal) || startBal <= 0) {
+    return { error: 'invalid_scaling' };
+  }
+
+  const startParts = String(startDateKey).split('-').map(Number);
+  const endParts = String(endDateKey).split('-').map(Number);
+  const rangeStart = new Date(startParts[0], startParts[1] - 1, startParts[2]);
+  const rangeEnd = new Date(endParts[0], endParts[1] - 1, endParts[2]);
+  if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime()) || rangeStart > rangeEnd) {
+    return { error: 'invalid_scope' };
+  }
+  const spanDays = Math.ceil((rangeEnd - rangeStart) / (24 * 60 * 60 * 1000)) + 1;
+  if (spanDays > PROP_EVAL_MAX_RANGE_DAYS) {
+    return { error: 'range_too_long' };
+  }
+
+  const bucket = dailyResults?.[strategyId];
+  if (!bucket || typeof bucket !== 'object') {
+    return {
+      strategyId,
+      period: { startDateKey, endDateKey },
+      dayRows: [],
+      tradingDaysCount: 0,
+      totalNetProfitDollars: 0,
+      biggestProfitDayDollars: 0,
+      biggestLossDayDollars: 0,
+      totalGreenProfitDollars: 0,
+      largestWinDayShareOfTotalGreenPercent: null,
+      equityEodDollars: [],
+      maxEodDrawdownDollars: 0,
+      winRatePercent: null,
+      avgRiskReward: null,
+      totalTrades: 0
+    };
+  }
+
+  const dayRows = [];
+  const cur = new Date(rangeStart.getTime());
+  while (cur <= rangeEnd) {
+    if (isWeekday(cur)) {
+      const dateKey = formatDateKey(cur);
+      const agg = getStrategyDayTotalRFromBucket(bucket, dateKey);
+      if (agg) {
+        const pnlDollars = agg.totalR * dr;
+        dayRows.push({
+          dateKey,
+          totalR: agg.totalR,
+          tradeCount: agg.tradeCount,
+          pnlDollars
+        });
+      }
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  const tradingDaysCount = dayRows.length;
+  let totalNetProfitDollars = 0;
+  let biggestProfitDayDollars = 0;
+  let biggestLossDayDollars = 0;
+  let totalGreenProfitDollars = 0;
+  let totalTrades = 0;
+  for (const row of dayRows) {
+    totalNetProfitDollars += row.pnlDollars;
+    totalTrades += row.tradeCount;
+    if (row.pnlDollars > biggestProfitDayDollars) biggestProfitDayDollars = row.pnlDollars;
+    if (row.pnlDollars < biggestLossDayDollars) biggestLossDayDollars = row.pnlDollars;
+    if (row.pnlDollars > 0) totalGreenProfitDollars += row.pnlDollars;
+  }
+
+  const winningDays = dayRows.filter((r) => r.pnlDollars > 0);
+  const losingDays = dayRows.filter((r) => r.pnlDollars < 0);
+  const winRatePercent = tradingDaysCount ? (winningDays.length / tradingDaysCount) * 100 : null;
+  let avgRiskReward = null;
+  if (winningDays.length && losingDays.length) {
+    const avgWin = winningDays.reduce((s, r) => s + r.pnlDollars, 0) / winningDays.length;
+    const avgLossAbs = Math.abs(losingDays.reduce((s, r) => s + r.pnlDollars, 0) / losingDays.length);
+    if (avgLossAbs > 0) avgRiskReward = avgWin / avgLossAbs;
+  }
+
+  let largestWinDayShareOfTotalGreenPercent = null;
+  if (totalGreenProfitDollars > 0 && winningDays.length) {
+    const maxWin = Math.max(...winningDays.map((r) => r.pnlDollars));
+    largestWinDayShareOfTotalGreenPercent = (maxWin / totalGreenProfitDollars) * 100;
+  }
+
+  const equityEodDollars = [];
+  let eq = startBal;
+  for (const row of dayRows) {
+    eq += row.pnlDollars;
+    equityEodDollars.push(eq);
+  }
+
+  let highWater = startBal;
+  let maxEodDrawdownDollars = 0;
+  for (const e of equityEodDollars) {
+    highWater = Math.max(highWater, e);
+    maxEodDrawdownDollars = Math.max(maxEodDrawdownDollars, highWater - e);
+  }
+
+  return {
+    strategyId,
+    period: { startDateKey, endDateKey },
+    dayRows,
+    tradingDaysCount,
+    totalNetProfitDollars,
+    biggestProfitDayDollars,
+    biggestLossDayDollars,
+    totalGreenProfitDollars,
+    largestWinDayShareOfTotalGreenPercent,
+    equityEodDollars,
+    maxEodDrawdownDollars,
+    winRatePercent,
+    avgRiskReward,
+    totalTrades
+  };
+}
+
+/**
+ * Generic custom evaluation (historical EOD). Consumes aggregateStrategyPerformanceInRange output + rule params.
+ * drawdownType: 'static_drawdown' | 'trailing_eod'
+ */
+function evaluateCustomHistoricalEvaluation(aggregated, rules) {
+  const {
+    profitTargetDollars,
+    maxDrawdownDollars,
+    minTradingDays,
+    consistencyCapPercent,
+    consistencyEnabled,
+    drawdownType,
+    startingBalanceDollars,
+    closeToPassTargetRatio
+  } = rules;
+
+  const ratio = Number.isFinite(closeToPassTargetRatio) ? closeToPassTargetRatio : 0.85;
+
+  if (aggregated.error === 'range_too_long') {
+    return {
+      outcome: 'insufficient_data',
+      reasonCode: 'insufficient_data',
+      explanation: `Choose a shorter period (maximum ${PROP_EVAL_MAX_RANGE_DAYS} calendar days).`,
+      checks: null
+    };
+  }
+
+  if (aggregated.error) {
+    return {
+      outcome: 'insufficient_data',
+      reasonCode: 'insufficient_data',
+      explanation: 'Could not load performance for that strategy and date range.',
+      checks: null
+    };
+  }
+
+  if (aggregated.tradingDaysCount === 0) {
+    return {
+      outcome: 'insufficient_data',
+      reasonCode: 'insufficient_data',
+      explanation: 'No logged trading days in this period. Widen the range or pick dates when you traded.',
+      checks: null
+    };
+  }
+
+  const start = Number(startingBalanceDollars);
+  const target = Number(profitTargetDollars);
+  const maxDd = Number(maxDrawdownDollars);
+  const minDays = Math.max(1, Math.floor(Number(minTradingDays) || 1));
+
+  const series = aggregated.equityEodDollars;
+  const drawdownBreached = checkEodDrawdownBreached(series, start, maxDd, drawdownType);
+
+  const minDaysOk = aggregated.tradingDaysCount >= minDays;
+  let consistencyOk = true;
+  if (consistencyEnabled && Number.isFinite(consistencyCapPercent) && aggregated.totalGreenProfitDollars > 0) {
+    const share = aggregated.largestWinDayShareOfTotalGreenPercent;
+    consistencyOk = share != null && share <= consistencyCapPercent;
+  }
+
+  const targetOk = aggregated.totalNetProfitDollars >= target;
+
+  const checks = {
+    targetOk,
+    targetProgressRatio: target > 0 ? aggregated.totalNetProfitDollars / target : null,
+    drawdownOk: !drawdownBreached,
+    minDaysOk,
+    consistencyOk,
+    drawdownModel: drawdownType === 'trailing_eod' ? 'Trailing EOD' : 'Static from start'
+  };
+
+  if (drawdownBreached) {
+    return {
+      outcome: 'failed',
+      reasonCode: 'drawdown_breached',
+      explanation: 'End-of-day equity breached the drawdown limit for the selected model (intraday not included).',
+      checks
+    };
+  }
+  if (!minDaysOk) {
+    return {
+      outcome: 'failed',
+      reasonCode: 'min_days_not_met',
+      explanation: `Need at least ${minDays} logged trading days in this period; had ${aggregated.tradingDaysCount}.`,
+      checks
+    };
+  }
+  if (!consistencyOk) {
+    return {
+      outcome: 'failed',
+      reasonCode: 'consistency_breached',
+      explanation: 'Largest winning day was too large a share of total green profit versus your consistency cap (EOD only).',
+      checks
+    };
+  }
+  if (targetOk) {
+    return {
+      outcome: 'passed',
+      reasonCode: null,
+      explanation: 'All checked rules passed for this period using your logged trades (EOD only).',
+      checks
+    };
+  }
+
+  const closeEnough = target > 0 && aggregated.totalNetProfitDollars >= ratio * target;
+  if (closeEnough) {
+    return {
+      outcome: 'close_to_pass',
+      reasonCode: 'target_not_reached',
+      explanation: `Profit target not fully reached, but net profit was at least ${Math.round(ratio * 100)}% of target with no other rule failures.`,
+      checks
+    };
+  }
+
+  return {
+    outcome: 'failed',
+    reasonCode: 'target_not_reached',
+    explanation: 'Net profit for the selected range did not reach the profit target.',
+    checks
+  };
+}
+
+function checkEodDrawdownBreached(equityEodDollars, startingBalance, maxDrawdownDollars, drawdownType) {
+  const start = Number(startingBalance);
+  const maxDd = Number(maxDrawdownDollars);
+  if (!Array.isArray(equityEodDollars) || equityEodDollars.length === 0) return false;
+  if (drawdownType === 'trailing_eod') {
+    let hw = start;
+    for (const eq of equityEodDollars) {
+      hw = Math.max(hw, eq);
+      if (eq < hw - maxDd) return true;
+    }
+    return false;
+  }
+  const floor = start - maxDd;
+  return equityEodDollars.some((eq) => eq < floor);
+}
+
+function buildSliceMetricsFromDayRows(dayRowsSlice, startingBalance) {
+  const startBal = Number(startingBalance);
+  let totalNetProfitDollars = 0;
+  let totalGreenProfitDollars = 0;
+  const equityEodDollars = [];
+  let eq = startBal;
+  for (const row of dayRowsSlice) {
+    totalNetProfitDollars += row.pnlDollars;
+    eq += row.pnlDollars;
+    equityEodDollars.push(eq);
+    if (row.pnlDollars > 0) totalGreenProfitDollars += row.pnlDollars;
+  }
+  let largestWinDayShareOfTotalGreenPercent = null;
+  if (totalGreenProfitDollars > 0) {
+    const greenRows = dayRowsSlice.filter((r) => r.pnlDollars > 0);
+    const maxWin = Math.max(...greenRows.map((r) => r.pnlDollars));
+    largestWinDayShareOfTotalGreenPercent = (maxWin / totalGreenProfitDollars) * 100;
+  }
+  return {
+    tradingDaysCount: dayRowsSlice.length,
+    totalNetProfitDollars,
+    totalGreenProfitDollars,
+    largestWinDayShareOfTotalGreenPercent,
+    equityEodDollars
+  };
+}
+
+function slicePassesAllEvaluationRules(sliceMetrics, rules) {
+  const {
+    profitTargetDollars,
+    maxDrawdownDollars,
+    minTradingDays,
+    consistencyCapPercent,
+    consistencyEnabled,
+    drawdownType,
+    startingBalanceDollars
+  } = rules;
+  const targetOk = sliceMetrics.totalNetProfitDollars >= Number(profitTargetDollars);
+  const ddBreached = checkEodDrawdownBreached(
+    sliceMetrics.equityEodDollars,
+    startingBalanceDollars,
+    maxDrawdownDollars,
+    drawdownType
+  );
+  const minDaysOk = sliceMetrics.tradingDaysCount >= Math.max(1, Math.floor(Number(minTradingDays) || 1));
+  let consistencyOk = true;
+  if (consistencyEnabled && Number.isFinite(consistencyCapPercent) && sliceMetrics.totalGreenProfitDollars > 0) {
+    const share = sliceMetrics.largestWinDayShareOfTotalGreenPercent;
+    consistencyOk = share != null && share <= consistencyCapPercent;
+  }
+  return targetOk && !ddBreached && minDaysOk && consistencyOk;
+}
+
+/**
+ * First calendar dates (logged EOD rows only) when conditions are first met in month order.
+ */
+function findEvaluationPassDatesFromDayRows(dayRows, rules) {
+  if (!dayRows || dayRows.length === 0) {
+    return { firstProfitTargetHitDateKey: null, firstFullPassDateKey: null };
+  }
+  let cum = 0;
+  let firstProfitTargetHitDateKey = null;
+  const target = Number(rules.profitTargetDollars);
+  for (const row of dayRows) {
+    cum += row.pnlDollars;
+    if (firstProfitTargetHitDateKey == null && cum >= target) {
+      firstProfitTargetHitDateKey = row.dateKey;
+    }
+  }
+  let firstFullPassDateKey = null;
+  for (let i = 0; i < dayRows.length; i++) {
+    const slice = dayRows.slice(0, i + 1);
+    const m = buildSliceMetricsFromDayRows(slice, rules.startingBalanceDollars);
+    if (slicePassesAllEvaluationRules(m, rules)) {
+      firstFullPassDateKey = dayRows[i].dateKey;
+      break;
+    }
+  }
+  return { firstProfitTargetHitDateKey, firstFullPassDateKey };
+}
+
+function formatDateKeyForDisplay(dateKey) {
+  if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return '—';
+  const d = new Date(`${dateKey}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 const SAMPLE_DAILY_PL = {
@@ -821,7 +1501,7 @@ let declarations = loadDeclarations();
 let currentDate = new Date();
 let selectedDate = new Date();
 let logModalTargetDate = null;
-/** Month shown on Daily Log → Calendar (journal), independent of P/L calendar. */
+/** Month shown on journal mini-calendar (when that UI exists), independent of P/L calendar. */
 let journalLogMonth = new Date();
 let journalEntryEditId = null;
 let journalPickerKind = null;
@@ -1525,7 +2205,7 @@ function syncCalendarUserBio() {
   textEl.textContent = bio;
 }
 
-/* ---------- Daily Log (Notion-style journal): localStorage ---------- */
+/* ---------- Journal entries (localStorage + optional Supabase sync) ---------- */
 
 function loadJournalEntries() {
   try {
@@ -2848,7 +3528,6 @@ function saveJournalEntryFromModal() {
   }
 
   closeJournalEntryModal();
-  renderDailyLogScreen();
 }
 
 function deleteJournalEntryFromModal() {
@@ -2871,7 +3550,6 @@ function deleteJournalEntryFromModal() {
   }
 
   closeJournalEntryModal();
-  renderDailyLogScreen();
 }
 
 function journalPrevMonth() {
@@ -2890,25 +3568,55 @@ function journalGoToday() {
   renderJournalCalendar();
 }
 
-function renderDailyLogScreen() {
-  renderJournalOverview();
-  renderJournalCalendar();
+function setPlannersDropdownOpen(open) {
+  const wrap = document.getElementById('mainNavPlanners');
+  const panel = document.getElementById('navPlannersMenu');
+  const trig = document.getElementById('navPlannersTrigger');
+  if (!wrap || !panel || !trig) return;
+  wrap.classList.toggle('is-open', open);
+  panel.hidden = !open;
+  trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function togglePlannersDropdown() {
+  const panel = document.getElementById('navPlannersMenu');
+  if (!panel) return;
+  setPlannersDropdownOpen(!!panel.hidden);
 }
 
 function showScreen(screenId) {
+  setPlannersDropdownOpen(false);
+
   document.querySelectorAll('.screen').forEach((el) => {
     const isTarget = el.id === 'screen-' + screenId;
     el.classList.toggle('active', isTarget);
     el.hidden = !isTarget;
   });
-  document.querySelectorAll('.nav-tab').forEach((tab) => {
+
+  document.querySelectorAll('.nav-tab[data-screen]').forEach((tab) => {
     const isActive = tab.dataset.screen === screenId;
     tab.classList.toggle('active', isActive);
-    tab.setAttribute('aria-current', isActive ? 'page' : null);
+    if (isActive) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
   });
+
+  const plannerTrigger = document.getElementById('navPlannersTrigger');
+  const inPlanners = screenId === 'proprisk' || screenId === 'fundedplanner';
+  if (plannerTrigger) {
+    plannerTrigger.classList.toggle('active', inPlanners);
+  }
+
+  document.querySelectorAll('.nav-dropdown-item[data-screen]').forEach((item) => {
+    const isActive = item.dataset.screen === screenId;
+    item.classList.toggle('active', isActive);
+    if (isActive) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+
   if (screenId === 'calendar') renderCalendar();
-  if (screenId === 'dailylog') renderDailyLogScreen();
   if (screenId === 'analytics' && typeof window.renderAnalytics === 'function') window.renderAnalytics();
+  if (screenId === 'proprisk' && typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
+  if (screenId === 'fundedplanner' && typeof window.renderFundedAccountPlanner === 'function') window.renderFundedAccountPlanner();
 }
 
 function renderCalendar() {
@@ -3223,8 +3931,8 @@ document.addEventListener('DOMContentLoaded', () => {
     hydrateProfileSettings();
     if (typeof window.renderStrategyPills === 'function') window.renderStrategyPills();
     renderCalendar();
-    renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+    if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
   }
 
   window.__tagverseRefreshFromCloud = () => applyAuthState();
@@ -3297,16 +4005,31 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.persisted && currentUser) applyAuthState();
   });
 
-  document.querySelectorAll('.nav-tab').forEach((tab) => {
+  document.querySelectorAll('.nav-tab[data-screen]').forEach((tab) => {
     tab.addEventListener('click', () => showScreen(tab.dataset.screen));
   });
 
-  document.getElementById('journalTabOverview')?.addEventListener('click', () => switchJournalView('overview'));
-  document.getElementById('journalTabCalendar')?.addEventListener('click', () => switchJournalView('calendar'));
-  document.getElementById('journalNewEntryBtn')?.addEventListener('click', () => openJournalEntryModal(null));
-  document.getElementById('journalPrevMonth')?.addEventListener('click', journalPrevMonth);
-  document.getElementById('journalNextMonth')?.addEventListener('click', journalNextMonth);
-  document.getElementById('journalCalToday')?.addEventListener('click', journalGoToday);
+  document.getElementById('navPlannersTrigger')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePlannersDropdown();
+  });
+
+  document.querySelectorAll('.nav-dropdown-item[data-screen]').forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = item.dataset.screen;
+      if (id) showScreen(id);
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#mainNavPlanners')) setPlannersDropdownOpen(false);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setPlannersDropdownOpen(false);
+  });
+
   document.getElementById('journalEntryModalBackdrop')?.addEventListener('click', closeJournalEntryModal);
   document.getElementById('journalEntryCloseHeader')?.addEventListener('click', closeJournalEntryModal);
   document.getElementById('journalEntryCancelBtn')?.addEventListener('click', closeJournalEntryModal);
@@ -3494,8 +4217,8 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           if (journalSelect) journalSelect.value = selectedStrategyId;
           renderCalendar();
-          renderDailyLogScreen();
           if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+          if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
           if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
           scheduleProfilePreferencesSync();
         });
@@ -3556,8 +4279,8 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSelectedStrategyId(selectedStrategyId);
     renderStrategyPills();
     renderCalendar();
-    renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+    if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
     if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
     scheduleProfilePreferencesSync();
   });
@@ -3593,8 +4316,8 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSelectedStrategyId(id);
     renderStrategyPills();
     renderCalendar();
-    renderDailyLogScreen();
     if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+    if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
     if (typeof window.renderCompareStrategies === 'function') window.renderCompareStrategies();
     scheduleProfilePreferencesSync();
   });
@@ -4002,6 +4725,7 @@ document.addEventListener('DOMContentLoaded', () => {
       saveSelectedInstrument(selectedInstrument);
       renderCalendar();
       if (typeof window.renderAnalytics === 'function') window.renderAnalytics();
+      if (typeof window.renderPropRiskForecast === 'function') window.renderPropRiskForecast();
       scheduleProfilePreferencesSync();
     });
   });
@@ -4387,6 +5111,975 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.renderCompareStrategies = renderCompareStrategies;
 
+  // Prop Risk: historical EOD pass check from logged dailyResults (no Monte Carlo in this flow)
+  let propHistoricalPassResult = null;
+  let propSelectedStrategyId = null;
+  const propStrategyDisplayToId = new Map();
+
+  function clamp(n, min, max) {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function parseNumericInput(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const v = Number(String(el.value || '').trim());
+    return Number.isFinite(v) ? v : null;
+  }
+
+  function formatMoney(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+  }
+
+  const PLANNER_FIGURE_CLASSES = ['planner-figure--profit', 'planner-figure--loss', 'planner-figure--neutral', 'planner-figure--warn'];
+
+  function clearPlannerFigureTone(id) {
+    const el = typeof id === 'string' ? document.getElementById(id) : id;
+    if (!el) return;
+    PLANNER_FIGURE_CLASSES.forEach((c) => el.classList.remove(c));
+  }
+
+  function setPlannerFigureTone(el, tone) {
+    if (!el) return;
+    PLANNER_FIGURE_CLASSES.forEach((c) => el.classList.remove(c));
+    if (tone && tone !== 'neutral') el.classList.add('planner-figure--' + tone);
+  }
+
+  function setPlannerFigureToneById(id, tone) {
+    setPlannerFigureTone(document.getElementById(id), tone);
+  }
+
+  function getPropSelectedStrategyStats() {
+    return propSelectedStrategyId ? getStrategyForecastStats(propSelectedStrategyId) : null;
+  }
+
+  function renderPropStrategySnapshot(stats) {
+    const set = (id, text) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    };
+    if (!stats || stats.sampleDays === 0) {
+      set('propSnapshotWinRate', '—');
+      set('propSnapshotRR', '—');
+      set('propSnapshotTradesPerDay', '—');
+      set('propSnapshotRiskPerTrade', '—');
+      set('propSnapshotTotalTrades', '—');
+      set('propSnapshotSampleDays', '—');
+      [
+        'propSnapshotWinRate',
+        'propSnapshotRR',
+        'propSnapshotTradesPerDay',
+        'propSnapshotRiskPerTrade',
+        'propSnapshotTotalTrades',
+        'propSnapshotSampleDays'
+      ].forEach((sid) => clearPlannerFigureTone(sid));
+      const prov = document.getElementById('propProvenanceText');
+      if (prov) prov.hidden = true;
+      return;
+    }
+    set('propSnapshotWinRate', `${stats.winRate.toFixed(1)}%`);
+    setPlannerFigureToneById('propSnapshotWinRate', stats.winRate >= 50 ? 'profit' : 'loss');
+    set('propSnapshotRR', stats.avgRiskReward != null ? stats.avgRiskReward.toFixed(2) : '—');
+    if (stats.avgRiskReward != null) {
+      setPlannerFigureToneById('propSnapshotRR', stats.avgRiskReward >= 1 ? 'profit' : 'loss');
+    } else {
+      clearPlannerFigureTone('propSnapshotRR');
+    }
+    set('propSnapshotTradesPerDay', stats.avgTradesPerDay != null ? stats.avgTradesPerDay.toFixed(2) : '—');
+    set('propSnapshotRiskPerTrade', stats.avgRiskPerTrade != null ? `${stats.avgRiskPerTrade.toFixed(2)}R` : '—');
+    set('propSnapshotTotalTrades', String(stats.totalTrades));
+    set('propSnapshotSampleDays', String(stats.sampleDays));
+    const prov = document.getElementById('propProvenanceText');
+    if (prov) {
+      prov.hidden = false;
+      prov.textContent = `All-time snapshot from your logs: ${stats.sampleDays} weekday days with data. Use the date range above for the evaluation.`;
+    }
+  }
+
+  function renderPropStrategyEmptyStates(loggedStrategies) {
+    const emptyNoStrategies = document.getElementById('propEmptyNoStrategies');
+    const emptyNoSelection = document.getElementById('propEmptyNoSelection');
+    const hasLogged = Array.isArray(loggedStrategies) && loggedStrategies.length > 0;
+    if (emptyNoStrategies) emptyNoStrategies.hidden = hasLogged;
+    if (emptyNoSelection) emptyNoSelection.hidden = !hasLogged || !!propSelectedStrategyId;
+  }
+
+  function renderPropStrategySelector() {
+    const input = document.getElementById('propStrategySearch');
+    const datalist = document.getElementById('propStrategyList');
+    if (!input || !datalist) return;
+
+    propStrategyDisplayToId.clear();
+    datalist.innerHTML = '';
+
+    const loggedStrategies = (strategies || [])
+      .map((s) => ({ strategy: s, stats: getStrategyForecastStats(s.id) }))
+      .filter((row) => row.stats && row.stats.sampleDays > 0);
+
+    loggedStrategies.forEach((row) => {
+      const option = document.createElement('option');
+      option.value = row.strategy.name;
+      option.label = `${row.stats.sampleDays} days • ${row.stats.totalTrades} trades`;
+      datalist.appendChild(option);
+      propStrategyDisplayToId.set(row.strategy.name, row.strategy.id);
+    });
+
+    if (propSelectedStrategyId) {
+      const current = (strategies || []).find((s) => s.id === propSelectedStrategyId);
+      if (!current || !propStrategyDisplayToId.has(current.name)) {
+        propSelectedStrategyId = null;
+      }
+    }
+    input.value = propSelectedStrategyId
+      ? ((strategies || []).find((s) => s.id === propSelectedStrategyId)?.name || '')
+      : '';
+
+    renderPropStrategyEmptyStates(loggedStrategies);
+    renderPropStrategySnapshot(getPropSelectedStrategyStats());
+  }
+
+  function updatePropSelectionFromInput() {
+    const input = document.getElementById('propStrategySearch');
+    if (!input) return;
+    const raw = String(input.value || '').trim();
+    if (!raw) {
+      propSelectedStrategyId = null;
+      renderPropStrategySelector();
+      return;
+    }
+    const idFromMap = propStrategyDisplayToId.get(raw);
+    if (!idFromMap) {
+      return;
+    }
+    if (idFromMap === propSelectedStrategyId) return;
+    propSelectedStrategyId = idFromMap;
+    const stats = getPropSelectedStrategyStats();
+    renderPropStrategySelector();
+    const msg = document.getElementById('propForecastMessage');
+    if (msg) msg.textContent = `Using strategy: ${stats?.strategyName || raw}`;
+  }
+
+  function normalizeHistoricalPassInputs() {
+    if (!propSelectedStrategyId) {
+      return { error: 'Select a strategy with logged calendar data.' };
+    }
+    const startDateKey = String(document.getElementById('propEvalStartDate')?.value || '').trim();
+    const endDateKey = String(document.getElementById('propEvalEndDate')?.value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateKey) || !/^\d{4}-\d{2}-\d{2}$/.test(endDateKey)) {
+      return { error: 'Choose a start and end date for the evaluation.' };
+    }
+    const sp = startDateKey.split('-').map(Number);
+    const ep = endDateKey.split('-').map(Number);
+    const d0 = new Date(sp[0], sp[1] - 1, sp[2]);
+    const d1 = new Date(ep[0], ep[1] - 1, ep[2]);
+    if (Number.isNaN(d0.getTime()) || Number.isNaN(d1.getTime()) || d0 > d1) {
+      return { error: 'End date must be on or after start date.' };
+    }
+    const startingBalance = parseNumericInput('propStartingBalance');
+    const profitTarget = parseNumericInput('propProfitTarget');
+    const maxDrawdown = parseNumericInput('propMaxDrawdown');
+    const minTradingDays = parseNumericInput('propMinTradingDays');
+    const dollarsPerR = parseNumericInput('propDollarsPerR');
+    const consistencyCap = parseNumericInput('propConsistencyCapPct');
+    const consistencyEnabled = !!document.getElementById('propConsistencyEnabled')?.checked;
+    const drawdownType = document.getElementById('propDrawdownType')?.value || 'static_drawdown';
+
+    if (!Number.isFinite(startingBalance) || startingBalance <= 0) return { error: 'Starting balance must be greater than 0.' };
+    if (!Number.isFinite(profitTarget) || profitTarget <= 0) return { error: 'Profit target must be greater than 0.' };
+    if (!Number.isFinite(maxDrawdown) || maxDrawdown <= 0) return { error: 'Max drawdown must be greater than 0.' };
+    if (!Number.isFinite(minTradingDays) || minTradingDays < 1) return { error: 'Minimum trading days must be at least 1.' };
+    if (!Number.isFinite(dollarsPerR) || dollarsPerR <= 0) {
+      return { error: 'Dollars per 1R must be greater than 0 (maps logged R to dollars).' };
+    }
+    if (consistencyEnabled && (!Number.isFinite(consistencyCap) || consistencyCap <= 0 || consistencyCap > 100)) {
+      return { error: 'Consistency cap must be between 1 and 100 when enabled.' };
+    }
+
+    const strategy = (strategies || []).find((s) => s.id === propSelectedStrategyId);
+    return {
+      data: {
+        strategyId: propSelectedStrategyId,
+        strategyName: strategy?.name || 'Strategy',
+        startDateKey,
+        endDateKey,
+        startingBalance,
+        profitTarget,
+        maxDrawdown,
+        minTradingDays: Math.floor(minTradingDays),
+        dollarsPerR,
+        consistencyCapPercent: consistencyEnabled ? clamp(consistencyCap, 1, 100) : null,
+        consistencyEnabled,
+        drawdownType
+      }
+    };
+  }
+
+  function outcomeLabel(outcome) {
+    if (outcome === 'passed') return 'Passed';
+    if (outcome === 'failed') return 'Failed';
+    if (outcome === 'close_to_pass') return 'Close to Pass';
+    if (outcome === 'insufficient_data') return 'Insufficient Data';
+    return '—';
+  }
+
+  function renderHistoricalPassResult(result) {
+    const set = (id, text) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    };
+    const badge = document.getElementById('propEvalOutcome');
+    if (badge) {
+      badge.classList.remove('prop-outcome-passed', 'prop-outcome-failed', 'prop-outcome-close', 'prop-outcome-insufficient');
+      if (result?.evaluation?.outcome) {
+        const o = result.evaluation.outcome;
+        badge.classList.add(
+          o === 'passed' ? 'prop-outcome-passed'
+            : o === 'failed' ? 'prop-outcome-failed'
+              : o === 'close_to_pass' ? 'prop-outcome-close'
+                : 'prop-outcome-insufficient'
+        );
+      }
+    }
+
+    if (!result || !result.evaluation) {
+      set('propEvalOutcome', '—');
+      set('propEvalTargetProgress', '—');
+      set('propEvalDrawdownStatus', '—');
+      set('propEvalTradingDays', '—');
+      set('propEvalConsistency', '—');
+      ['propEvalTargetProgress', 'propEvalDrawdownStatus', 'propEvalConsistency'].forEach((id) => clearPlannerFigureTone(id));
+      set('propEvalOutcomeReason', 'Run evaluation to see your outcome from logged trades.');
+      set('propEvalFirstTargetDate', '—');
+      set('propEvalFirstFullPassDate', '—');
+      const fb = document.getElementById('propFallbackNote');
+      if (fb) {
+        fb.hidden = true;
+        fb.textContent = '';
+      }
+      return;
+    }
+
+    const ev = result.evaluation;
+    const agg = result.aggregated;
+    const checks = ev.checks;
+
+    set('propEvalOutcome', outcomeLabel(ev.outcome));
+
+    if (agg && !agg.error && ev.outcome === 'insufficient_data' && agg.tradingDaysCount === 0) {
+      set('propEvalTargetProgress', formatMoney(0));
+      setPlannerFigureToneById('propEvalTargetProgress', 'neutral');
+      set('propEvalDrawdownStatus', '—');
+      clearPlannerFigureTone('propEvalDrawdownStatus');
+      set('propEvalTradingDays', '0 / ' + result.minTradingDays + ' logged days');
+      set('propEvalConsistency', '—');
+      clearPlannerFigureTone('propEvalConsistency');
+    } else if (checks && agg && !agg.error) {
+      const net = agg.totalNetProfitDollars;
+      const tgt = result.profitTarget;
+      const pct = tgt > 0 ? (net / tgt) * 100 : null;
+      const tpEl = document.getElementById('propEvalTargetProgress');
+      if (tpEl) {
+        const netTone = net > 0 ? 'profit' : net < 0 ? 'loss' : 'neutral';
+        const netWrap =
+          netTone === 'neutral'
+            ? formatMoney(net)
+            : `<span class="planner-figure--${netTone}">${formatMoney(net)}</span>`;
+        const pctPart =
+          pct != null ? ` <span class="planner-figure-meta">(${pct.toFixed(0)}% of target)</span>` : '';
+        tpEl.innerHTML = `${netWrap} <span class="planner-figure-sep">/</span> ${formatMoney(tgt)}${pctPart}`;
+      }
+      const ddLine = checks.drawdownOk
+        ? `Within limit (max EOD drawdown ${formatMoney(agg.maxEodDrawdownDollars)} vs ${formatMoney(result.maxDrawdown)}; ${checks.drawdownModel})`
+        : `Breached (${checks.drawdownModel}; intraday not included)`;
+      const ddEl = document.getElementById('propEvalDrawdownStatus');
+      if (ddEl) {
+        ddEl.textContent = ddLine;
+        setPlannerFigureTone(ddEl, checks.drawdownOk ? 'profit' : 'loss');
+      }
+      set(
+        'propEvalTradingDays',
+        `${agg.tradingDaysCount} / ${result.minTradingDays} logged days`
+      );
+      if (!result.consistencyEnabled) {
+        set('propEvalConsistency', 'Not applied');
+        clearPlannerFigureTone('propEvalConsistency');
+      } else if (agg.totalGreenProfitDollars <= 0) {
+        set('propEvalConsistency', 'N/A (no green days)');
+        clearPlannerFigureTone('propEvalConsistency');
+      } else {
+        const share = agg.largestWinDayShareOfTotalGreenPercent;
+        set(
+          'propEvalConsistency',
+          checks.consistencyOk
+            ? `Pass (largest win day ${share != null ? share.toFixed(0) : '—'}% of green total; cap ${result.consistencyCapPercent}%)`
+            : `Breached (largest win day ${share != null ? share.toFixed(0) : '—'}% vs cap ${result.consistencyCapPercent}%)`
+        );
+        setPlannerFigureToneById('propEvalConsistency', checks.consistencyOk ? 'profit' : 'loss');
+      }
+    } else {
+      set('propEvalTargetProgress', '—');
+      set('propEvalDrawdownStatus', '—');
+      set('propEvalTradingDays', '—');
+      set('propEvalConsistency', '—');
+      ['propEvalTargetProgress', 'propEvalDrawdownStatus', 'propEvalConsistency'].forEach((id) => clearPlannerFigureTone(id));
+    }
+
+    set('propEvalOutcomeReason', ev.explanation || '—');
+
+    const pd = result.passDates;
+    if (pd && agg && !agg.error && agg.dayRows && agg.dayRows.length) {
+      set(
+        'propEvalFirstTargetDate',
+        pd.firstProfitTargetHitDateKey
+          ? `${formatDateKeyForDisplay(pd.firstProfitTargetHitDateKey)} (${pd.firstProfitTargetHitDateKey})`
+          : 'Not reached on any logged day in the selected range'
+      );
+      set(
+        'propEvalFirstFullPassDate',
+        pd.firstFullPassDateKey
+          ? `${formatDateKeyForDisplay(pd.firstFullPassDateKey)} (${pd.firstFullPassDateKey})`
+          : 'None — no logged EOD in the selected range had target + drawdown + min days + consistency (if on) all satisfied together.'
+      );
+    } else {
+      set('propEvalFirstTargetDate', '—');
+      set('propEvalFirstFullPassDate', '—');
+    }
+
+    const fb = document.getElementById('propFallbackNote');
+    if (fb) {
+      fb.hidden = false;
+      fb.textContent = `Based on your logged trades from ${result.periodLabel} for “${result.strategyName}”. End-of-day rule checks only; intraday breaches are not modelled.`;
+    }
+  }
+
+  function runHistoricalPassCheck() {
+    const msg = document.getElementById('propForecastMessage');
+    const normalized = normalizeHistoricalPassInputs();
+    if (normalized.error) {
+      if (msg) msg.textContent = normalized.error;
+      propHistoricalPassResult = null;
+      renderHistoricalPassResult(null);
+      return;
+    }
+    const p = normalized.data;
+    const agg = aggregateStrategyPerformanceInRange(
+      p.strategyId,
+      p.startDateKey,
+      p.endDateKey,
+      p.dollarsPerR,
+      p.startingBalance
+    );
+    const evalResult = evaluateCustomHistoricalEvaluation(agg, {
+      profitTargetDollars: p.profitTarget,
+      maxDrawdownDollars: p.maxDrawdown,
+      minTradingDays: p.minTradingDays,
+      consistencyCapPercent: p.consistencyCapPercent,
+      consistencyEnabled: p.consistencyEnabled,
+      drawdownType: p.drawdownType,
+      startingBalanceDollars: p.startingBalance
+    });
+    const periodLabel = `${formatDateKeyForDisplay(p.startDateKey)} → ${formatDateKeyForDisplay(p.endDateKey)}`;
+    const rulesForTimeline = {
+      profitTargetDollars: p.profitTarget,
+      maxDrawdownDollars: p.maxDrawdown,
+      minTradingDays: p.minTradingDays,
+      consistencyCapPercent: p.consistencyCapPercent,
+      consistencyEnabled: p.consistencyEnabled,
+      drawdownType: p.drawdownType,
+      startingBalanceDollars: p.startingBalance
+    };
+    const passDates = agg.dayRows && agg.dayRows.length
+      ? findEvaluationPassDatesFromDayRows(agg.dayRows, rulesForTimeline)
+      : { firstProfitTargetHitDateKey: null, firstFullPassDateKey: null };
+    propHistoricalPassResult = {
+      ...p,
+      periodLabel,
+      aggregated: agg,
+      evaluation: evalResult,
+      passDates
+    };
+    renderHistoricalPassResult(propHistoricalPassResult);
+    if (msg) msg.textContent = 'Pass check complete.';
+  }
+
+  function renderPropRiskForecast() {
+    renderPropStrategySelector();
+    const startEl = document.getElementById('propEvalStartDate');
+    const endEl = document.getElementById('propEvalEndDate');
+    if (startEl && endEl && (!startEl.value || !endEl.value)) {
+      const n = new Date();
+      const y = n.getFullYear();
+      const m = n.getMonth();
+      const pad = (x) => String(x).padStart(2, '0');
+      const first = `${y}-${pad(m + 1)}-01`;
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      const last = `${y}-${pad(m + 1)}-${pad(lastDay)}`;
+      if (!startEl.value) startEl.value = first;
+      if (!endEl.value) endEl.value = last;
+    }
+    renderHistoricalPassResult(propHistoricalPassResult);
+  }
+  window.renderPropRiskForecast = renderPropRiskForecast;
+
+  // Funded Account Planner UI (scenario math lives in top-level computeFundedAccountPlannerScenario)
+  let fapSelectedStrategyId = null;
+  const fapStrategyDisplayToId = new Map();
+
+  function readFundedPlannerInputsFromDom() {
+    return {
+      numberOfAccounts: document.getElementById('fapNumAccounts')?.value,
+      riskPerTrade: document.getElementById('fapRiskPerTrade')?.value,
+      tradesPerDay: document.getElementById('fapTradesPerDay')?.value,
+      winRatePercent: document.getElementById('fapWinRate')?.value,
+      riskRewardRatio: document.getElementById('fapRiskReward')?.value,
+      tradingDaysPerMonth: document.getElementById('fapTradingDaysPerMonth')?.value,
+      maxDrawdownPerAccount: document.getElementById('fapMaxDrawdown')?.value
+    };
+  }
+
+  function interpretFundedPlannerRiskForUi(riskRow, inputs) {
+    const ratio =
+      riskRow.severityRatio != null && Number.isFinite(riskRow.severityRatio) ? riskRow.severityRatio : 0;
+    const pct = Math.min(999, Math.round(ratio * 100));
+    let riskLabel = 'Low';
+    let riskClass = 'safe';
+    let riskHelp =
+      'This modeled rough patch fits inside the drawdown you set, with room left for real-world wiggle.';
+    if (ratio > 1.1) {
+      riskLabel = 'High';
+      riskClass = 'high';
+      riskHelp =
+        'On paper, a losing run like this can overshoot your drawdown cap—worth trimming risk or expectations.';
+    } else if (ratio > 0.85) {
+      riskLabel = 'Moderate';
+      riskClass = 'moderate';
+      riskHelp =
+        'You still have some cushion, but a bad stretch could use most of your drawdown before the month ends.';
+    }
+
+    let outlook = 'Stable';
+    let outlookClass = 'stable';
+    let outlookHelp =
+      'There is some margin, but keep size and rules in mind if conditions turn.';
+    const surv = riskRow.survivalRatePercent;
+    if (riskRow.highBreachRisk || surv < 45) {
+      outlook = 'At Risk';
+      outlookClass = 'atrisk';
+      outlookHelp =
+        'If losses stack up, several funded accounts may struggle under this story—plan for tighter risk.';
+    } else if (surv >= 75 && ratio <= 1) {
+      outlook = 'Strong';
+      outlookClass = 'strong';
+      outlookHelp =
+        'Under these inputs, most of your funded accounts stay on firm ground in this scenario.';
+    }
+
+    let ddInterpret = 'You still have room under the drawdown you entered.';
+    if (pct > 100) {
+      ddInterpret =
+        'This run is larger than the max drawdown you set—on paper it would break the rule. Worth re-checking size.';
+    } else if (pct > 85) {
+      ddInterpret =
+        'You are using most of your drawdown budget in this story—real trades rarely line up this cleanly.';
+    } else if (pct > 55) {
+      ddInterpret = 'Roughly half to most of your cushion—keep some slack for real variance.';
+    }
+
+    const ar = riskRow.accountsAtRisk;
+    const accountsLine = ar <= 0 ? 'None' : `${ar} account${ar === 1 ? '' : 's'}`;
+    const accountsDetail =
+      ar <= 0
+        ? 'No seats look stretched in this snapshot. Based on this setup.'
+        : 'Seats that could feel heavy pressure if losses stack this way. Based on this setup.';
+
+    return {
+      riskLabel,
+      riskClass,
+      riskHelp,
+      pct,
+      ddInterpret,
+      outlook,
+      outlookClass,
+      outlookHelp,
+      accountsLine,
+      accountsDetail
+    };
+  }
+
+  const FAP_PROB_WINDOW = 100;
+  /** Streak lengths for the probability cards (vs. hero “losses to hit drawdown”). */
+  const FAP_PROB_STREAK_LENGTHS = [5, 10, 15, 20];
+
+  function renderFundedPlannerOutputsClear() {
+    const set = (id, text) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    };
+    set('fapOutProfitPerAccount', '—');
+    clearPlannerFigureTone('fapOutProfitPerAccount');
+    set('fapOutTotalProfit', '—');
+    clearPlannerFigureTone('fapOutTotalProfit');
+    set('fapHeroRiskTag', '—');
+    const heroPct = document.getElementById('fapHeroRiskPct');
+    if (heroPct) {
+      heroPct.textContent = '—';
+      heroPct.className = 'fap-metric-value fap-metric-tone--muted';
+    }
+    const heroRiskCard = document.getElementById('fapHeroRiskCard');
+    if (heroRiskCard) heroRiskCard.className = 'fap-metric-card fap-metric-card--band-neutral';
+
+    set('fapHeroBlowValue', '—');
+    set('fapHeroBlowSub', 'straight losses to use your max drawdown');
+    set('fapHeroRecValue', '—');
+    set('fapHeroRecSub', 'risk per trade at 4% of drawdown');
+
+    set('fapRiskLevelValue', '—');
+    clearPlannerFigureTone('fapRiskLevelValue');
+    set('fapRiskLevelHelp', '—');
+    set('fapOutWorstRunHeadline', '—');
+    clearPlannerFigureTone('fapOutWorstRunHeadline');
+    set('fapOutWorstRunDollars', '—');
+    clearPlannerFigureTone('fapOutWorstRunDollars');
+    set('fapOutWorstRunExplain', 'A “what if” losing streak — not a forecast.');
+    set('fapOutDdPressureLine', '—');
+    clearPlannerFigureTone('fapOutDdPressureLine');
+    set('fapOutDdPressureInterpret', '—');
+    set('fapOutAccountsLine', '—');
+    set('fapOutAccountsExplain', 'Based on this setup.');
+    set('fapOutSurvivalOutlook', '—');
+    set('fapOutSurvivalExplain', '—');
+    set('fapProbWinRateLine', '—');
+    set('fapProbCaption', '—');
+    FAP_PROB_STREAK_LENGTHS.forEach((k) => {
+      set('fapProbValLoss' + k, '—');
+      const c = document.getElementById('fapProbCardLoss' + k);
+      if (c) c.className = 'fap-prob-card';
+    });
+
+    const ind = document.getElementById('fapRiskIndicator');
+    if (ind) {
+      ind.className = 'fap-risk-indicator fap-risk-indicator--moderate';
+      ind.title = '';
+    }
+    const meta = document.getElementById('fapEarningsMeta');
+    if (meta) meta.textContent = 'Estimated from your win rate, dollars at risk per trade, and how often you trade.';
+  }
+
+  function renderFundedPlannerResults(result) {
+    const set = (id, text) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    };
+    const setHtml = (id, html) => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = html;
+    };
+    if (!result || !result.ok) {
+      renderFundedPlannerOutputsClear();
+      return;
+    }
+    const e = result.earnings;
+    const r = result.risk;
+    const inp = result.inputs;
+    const ui = interpretFundedPlannerRiskForUi(r, inp);
+
+    set('fapOutProfitPerAccount', formatMoney(e.profitPerAccount));
+    setPlannerFigureToneById(
+      'fapOutProfitPerAccount',
+      e.profitPerAccount > 0 ? 'profit' : e.profitPerAccount < 0 ? 'loss' : 'neutral'
+    );
+    set('fapOutTotalProfit', formatMoney(e.totalProfit));
+    setPlannerFigureToneById(
+      'fapOutTotalProfit',
+      e.totalProfit > 0 ? 'profit' : e.totalProfit < 0 ? 'loss' : 'neutral'
+    );
+
+    const heroAcct = fundedPlannerAccountRiskPresentation(inp.riskPerTrade, inp.maxDrawdownPerAccount);
+    const heroRiskCard = document.getElementById('fapHeroRiskCard');
+    const heroPctEl = document.getElementById('fapHeroRiskPct');
+    if (heroPctEl && heroAcct.pct != null) {
+      heroPctEl.textContent = heroAcct.pct.toFixed(1) + '%';
+      heroPctEl.className = 'fap-metric-value fap-metric-tone--' + heroAcct.valueTone;
+      set('fapHeroRiskTag', heroAcct.tag);
+      if (heroRiskCard) heroRiskCard.className = 'fap-metric-card fap-metric-card--band-' + heroAcct.band;
+    } else if (heroPctEl) {
+      heroPctEl.textContent = '—';
+      heroPctEl.className = 'fap-metric-value fap-metric-tone--muted';
+      set('fapHeroRiskTag', '—');
+      if (heroRiskCard) heroRiskCard.className = 'fap-metric-card fap-metric-card--band-neutral';
+    }
+
+    const blowK = Math.max(1, Math.floor(inp.maxDrawdownPerAccount / inp.riskPerTrade));
+    set('fapHeroBlowValue', String(blowK));
+    set(
+      'fapHeroBlowSub',
+      `${blowK} straight loss${blowK === 1 ? '' : 'es'} at your size to hit your drawdown limit`
+    );
+
+    if (inp.maxDrawdownPerAccount && inp.maxDrawdownPerAccount > 0) {
+      set('fapHeroRecValue', formatMoney(inp.maxDrawdownPerAccount * 0.04));
+      set('fapHeroRecSub', 'risk per trade at 4% of drawdown');
+    } else {
+      set('fapHeroRecValue', '—');
+      set('fapHeroRecSub', 'Add a drawdown limit above to see a 4% suggestion.');
+    }
+
+    const wrPct = Number(inp.winRatePercent);
+    const wrLine = document.getElementById('fapProbWinRateLine');
+    if (wrLine) {
+      wrLine.innerHTML = `Win rate in this block: <strong>${wrPct.toFixed(1)}%</strong> — matches <strong>Win rate (%)</strong> above. Turn on prefill and pick a strategy to load it from your calendar, or type any %.`;
+    }
+    set(
+      'fapProbCaption',
+      `Rough chance each streak happens at least once within ${FAP_PROB_WINDOW} trades, same odds each trade. Different from your drawdown line — only the streak length changes across the cards.`
+    );
+
+    const wr01 = wrPct / 100;
+    FAP_PROB_STREAK_LENGTHS.forEach((k) => {
+      const pr = fundedPlannerProbabilityAtLeastKConsecutiveLosses(FAP_PROB_WINDOW, wr01, k);
+      const valEl = document.getElementById('fapProbValLoss' + k);
+      const cardEl = document.getElementById('fapProbCardLoss' + k);
+      if (pr == null || !Number.isFinite(pr)) {
+        if (valEl) valEl.textContent = '—';
+        if (cardEl) cardEl.className = 'fap-prob-card';
+        return;
+      }
+      const pctRounded = Math.round(pr * 100);
+      if (valEl) valEl.textContent = pctRounded + '%';
+      let tier = 'low';
+      if (pctRounded >= 50) tier = 'high';
+      else if (pctRounded >= 15) tier = 'mid';
+      if (cardEl) cardEl.className = 'fap-prob-card fap-prob-card--' + tier;
+    });
+
+    const ind = document.getElementById('fapRiskIndicator');
+    if (ind) {
+      ind.className = 'fap-risk-indicator fap-risk-indicator--' + ui.riskClass;
+      ind.title = ui.riskLabel + ' risk';
+    }
+    set('fapRiskLevelValue', ui.riskLabel);
+    setPlannerFigureToneById(
+      'fapRiskLevelValue',
+      ui.riskClass === 'high' ? 'loss' : ui.riskClass === 'moderate' ? 'warn' : 'profit'
+    );
+    set('fapRiskLevelHelp', ui.riskHelp);
+
+    const streakN = r.maxLosingStreakApprox;
+    const streakLabel =
+      streakN >= 10 ? Math.round(streakN).toString() : streakN.toFixed(1).replace(/\.0$/, '');
+    set('fapOutWorstRunHeadline', `About ${streakLabel} losses in a row`);
+    setPlannerFigureToneById('fapOutWorstRunHeadline', 'loss');
+    set('fapOutWorstRunDollars', `About ${formatMoney(r.streakLossDollars)} if that run happens`);
+    setPlannerFigureToneById('fapOutWorstRunDollars', 'loss');
+    set('fapOutWorstRunExplain', 'A rough patch from your win rate — not a forecast.');
+
+    const pctWords = ui.pct < 1 ? 'less than 1' : String(ui.pct);
+    set(
+      'fapOutDdPressureLine',
+      `You're using about ${pctWords}% of your drawdown limit on each account.`
+    );
+    let ddLineTone = 'neutral';
+    if (ui.pct > 100) ddLineTone = 'loss';
+    else if (ui.pct > 55) ddLineTone = 'warn';
+    setPlannerFigureToneById('fapOutDdPressureLine', ddLineTone);
+    set('fapOutDdPressureInterpret', ui.ddInterpret);
+
+    set('fapOutAccountsLine', ui.accountsLine);
+    set('fapOutAccountsExplain', ui.accountsDetail);
+
+    setHtml(
+      'fapOutSurvivalOutlook',
+      `<span class="fap-survival-badge fap-survival-badge--${ui.outlookClass}">${ui.outlook}</span>`
+    );
+    set('fapOutSurvivalExplain', ui.outlookHelp);
+
+    const meta = document.getElementById('fapEarningsMeta');
+    if (meta) {
+      meta.textContent = `Roughly ${e.totalTrades} trades in the month at your settings, before costs or slips.`;
+    }
+  }
+
+  let fapProjectDebounceTimer = null;
+
+  /** Recalculate earnings & risk when inputs change. Pass true to skip the “Projection updated.” toast. */
+  function runFundedPlannerProjection(silent) {
+    const msg = document.getElementById('fapInlineMsg');
+    const raw = readFundedPlannerInputsFromDom();
+    const result = computeFundedAccountPlannerScenario(raw);
+    if (!result.ok) {
+      renderFundedPlannerOutputsClear();
+      if (msg) msg.textContent = result.error || 'Check inputs.';
+      return;
+    }
+    renderFundedPlannerResults(result);
+    if (msg) {
+      if (silent) {
+        msg.textContent = '';
+      } else {
+        msg.textContent = 'Projection updated.';
+        window.setTimeout(() => {
+          if (msg && msg.textContent === 'Projection updated.') msg.textContent = '';
+        }, 2500);
+      }
+    }
+  }
+
+  function scheduleFundedPlannerProjection() {
+    if (fapProjectDebounceTimer) window.clearTimeout(fapProjectDebounceTimer);
+    fapProjectDebounceTimer = window.setTimeout(() => {
+      fapProjectDebounceTimer = null;
+      runFundedPlannerProjection(true);
+    }, 200);
+  }
+
+  function updateFapSelectionFromInput() {
+    const input = document.getElementById('fapStrategySearch');
+    if (!input) return;
+    const raw = String(input.value || '').trim();
+    if (!raw) {
+      fapSelectedStrategyId = null;
+      renderFundedPlannerStrategySelector();
+      scheduleFundedPlannerProjection();
+      return;
+    }
+    const idFromMap = fapStrategyDisplayToId.get(raw);
+    if (!idFromMap) return;
+    if (idFromMap === fapSelectedStrategyId) return;
+    fapSelectedStrategyId = idFromMap;
+    renderFundedPlannerStrategySelector();
+    if (document.getElementById('fapUseStrategyData')?.checked) applyFapStrategyPrefill();
+    scheduleFundedPlannerProjection();
+  }
+
+  function fapMonthPickerToBounds(ym) {
+    if (!ym || !/^\d{4}-\d{2}$/.test(String(ym))) return null;
+    const [y, m] = String(ym).split('-').map(Number);
+    const pad = (n) => String(n).padStart(2, '0');
+    const startDateKey = `${y}-${pad(m)}-01`;
+    const last = new Date(y, m, 0).getDate();
+    const endDateKey = `${y}-${pad(m)}-${pad(last)}`;
+    return { startDateKey, endDateKey };
+  }
+
+  function parseFapStrategyStatsPeriodBounds() {
+    const mode = document.querySelector('input[name="fapStatsPeriodMode"]:checked')?.value || 'month';
+    if (mode === 'month') {
+      const ym = document.getElementById('fapStatsMonth')?.value;
+      const b = fapMonthPickerToBounds(ym);
+      if (!b) return { error: 'Choose a calendar month for strategy stats.' };
+      return b;
+    }
+    const startDateKey = String(document.getElementById('fapStatsStartDate')?.value || '').trim();
+    const endDateKey = String(document.getElementById('fapStatsEndDate')?.value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateKey) || !/^\d{4}-\d{2}-\d{2}$/.test(endDateKey)) {
+      return { error: 'Choose start and end dates for the custom range.' };
+    }
+    const a = startDateKey.split('-').map(Number);
+    const b = endDateKey.split('-').map(Number);
+    const d0 = new Date(a[0], a[1] - 1, a[2]);
+    const d1 = new Date(b[0], b[1] - 1, b[2]);
+    if (Number.isNaN(d0.getTime()) || Number.isNaN(d1.getTime()) || d0 > d1) {
+      return { error: 'End date must be on or after start date.' };
+    }
+    return { startDateKey, endDateKey };
+  }
+
+  function updateFapPeriodModeUI() {
+    const mode = document.querySelector('input[name="fapStatsPeriodMode"]:checked')?.value || 'month';
+    const mw = document.getElementById('fapStatsMonthWrap');
+    const cw = document.getElementById('fapStatsCustomWrap');
+    if (mw) mw.hidden = mode !== 'month';
+    if (cw) cw.hidden = mode !== 'custom';
+  }
+
+  function ensureFapStatsPeriodDefaults() {
+    const m = document.getElementById('fapStatsMonth');
+    if (m && !m.value) {
+      const n = new Date();
+      m.value = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+    }
+    const s = document.getElementById('fapStatsStartDate');
+    const e = document.getElementById('fapStatsEndDate');
+    if (s && e && (!s.value || !e.value)) {
+      const n = new Date();
+      const y = n.getFullYear();
+      const mo = n.getMonth();
+      const pad = (x) => String(x).padStart(2, '0');
+      const first = `${y}-${pad(mo + 1)}-01`;
+      const lastDay = new Date(y, mo + 1, 0).getDate();
+      const last = `${y}-${pad(mo + 1)}-${pad(lastDay)}`;
+      if (!s.value) s.value = first;
+      if (!e.value) e.value = last;
+    }
+    updateFapPeriodModeUI();
+  }
+
+  function setFapStatsPeriodInputsDisabled(disabled) {
+    document.querySelectorAll('#fapStatsPeriodBlock input').forEach((el) => {
+      el.disabled = !!disabled;
+    });
+  }
+
+  function applyFapStrategyPrefill() {
+    const hint = document.getElementById('fapPrefillHint');
+    const use = !!document.getElementById('fapUseStrategyData')?.checked;
+    const search = document.getElementById('fapStrategySearch');
+    if (search) search.disabled = !use;
+    setFapStatsPeriodInputsDisabled(!use);
+    if (!use) {
+      if (hint) {
+        hint.hidden = true;
+        hint.textContent = '';
+      }
+      return;
+    }
+    if (!fapSelectedStrategyId) {
+      if (hint) {
+        hint.hidden = false;
+        hint.textContent = 'Choose a strategy to pull win rate, R:R, and trades/day from logs.';
+      }
+      return;
+    }
+
+    const boundsOrErr = parseFapStrategyStatsPeriodBounds();
+    if (boundsOrErr.error) {
+      if (hint) {
+        hint.hidden = false;
+        hint.textContent = boundsOrErr.error;
+      }
+      return;
+    }
+
+    const stats = getStrategyForecastStatsInRange(
+      fapSelectedStrategyId,
+      boundsOrErr.startDateKey,
+      boundsOrErr.endDateKey
+    );
+    if (!stats || stats.sampleDays === 0) {
+      if (hint) {
+        hint.hidden = false;
+        hint.textContent =
+          'No logged weekdays in that period for this strategy — widen the range or enter numbers manually.';
+      }
+      return;
+    }
+    const wrEl = document.getElementById('fapWinRate');
+    if (wrEl) wrEl.value = String(Math.round(stats.winRate * 10) / 10);
+    const rrEl = document.getElementById('fapRiskReward');
+    if (rrEl && stats.avgRiskReward != null) rrEl.value = String(Math.round(stats.avgRiskReward * 100) / 100);
+    const tpdEl = document.getElementById('fapTradesPerDay');
+    if (tpdEl && stats.avgTradesPerDay != null) tpdEl.value = String(Math.round(stats.avgTradesPerDay * 100) / 100);
+    const p0 = stats.periodStartDateKey
+      ? formatDateKeyForDisplay(stats.periodStartDateKey)
+      : '';
+    const p1 = stats.periodEndDateKey ? formatDateKeyForDisplay(stats.periodEndDateKey) : '';
+    const periodPhrase = p0 && p1 ? `${p0} → ${p1}` : '';
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = periodPhrase
+        ? `Prefilled from “${stats.strategyName}” (${stats.sampleDays} logged weekdays in ${periodPhrase}). You can edit any field.`
+        : `Prefilled from “${stats.strategyName}” (${stats.sampleDays} weekday days in logs). You can edit any field.`;
+    }
+  }
+
+  function renderFundedPlannerStrategySelector() {
+    ensureFapStatsPeriodDefaults();
+    const input = document.getElementById('fapStrategySearch');
+    const datalist = document.getElementById('fapStrategyList');
+    const emptyEl = document.getElementById('fapEmptyNoStrategies');
+    if (!input || !datalist) return;
+
+    fapStrategyDisplayToId.clear();
+    datalist.innerHTML = '';
+
+    const loggedStrategies = (strategies || [])
+      .map((s) => ({ strategy: s, stats: getStrategyForecastStats(s.id) }))
+      .filter((row) => row.stats && row.stats.sampleDays > 0);
+
+    loggedStrategies.forEach((row) => {
+      const option = document.createElement('option');
+      option.value = row.strategy.name;
+      option.label = `${row.stats.sampleDays} days • ${row.stats.totalTrades} trades`;
+      datalist.appendChild(option);
+      fapStrategyDisplayToId.set(row.strategy.name, row.strategy.id);
+    });
+
+    if (fapSelectedStrategyId) {
+      const current = (strategies || []).find((s) => s.id === fapSelectedStrategyId);
+      if (!current || !fapStrategyDisplayToId.has(current.name)) {
+        fapSelectedStrategyId = null;
+      }
+    }
+    input.value = fapSelectedStrategyId
+      ? (strategies || []).find((s) => s.id === fapSelectedStrategyId)?.name || ''
+      : '';
+    input.disabled = !document.getElementById('fapUseStrategyData')?.checked;
+
+    if (emptyEl) emptyEl.hidden = loggedStrategies.length > 0;
+
+    if (document.getElementById('fapUseStrategyData')?.checked) applyFapStrategyPrefill();
+  }
+
+  function renderFundedAccountPlanner() {
+    renderFundedPlannerStrategySelector();
+    runFundedPlannerProjection(true);
+  }
+  window.renderFundedAccountPlanner = renderFundedAccountPlanner;
+
+  document.getElementById('fapRunBtn')?.addEventListener('click', () => runFundedPlannerProjection(false));
+
+  const fapAutoUpdateIds = new Set([
+    'fapNumAccounts',
+    'fapRiskPerTrade',
+    'fapTradesPerDay',
+    'fapWinRate',
+    'fapRiskReward',
+    'fapTradingDaysPerMonth',
+    'fapMaxDrawdown'
+  ]);
+  function isFapAutoField(target) {
+    const el = target && target.nodeType === 1 ? target : null;
+    return el && el.id && fapAutoUpdateIds.has(el.id);
+  }
+  /** Delegation: always works even if direct query missed; catches number spinners / mobile quirks. */
+  const fapScreenEl = document.getElementById('screen-fundedplanner');
+  function onFapFieldActivity(ev) {
+    const id = ev.target?.id;
+    if (id === 'fapStatsMonth' || id === 'fapStatsStartDate' || id === 'fapStatsEndDate') {
+      if (document.getElementById('fapUseStrategyData')?.checked) applyFapStrategyPrefill();
+      scheduleFundedPlannerProjection();
+      return;
+    }
+    if (isFapAutoField(ev.target)) scheduleFundedPlannerProjection();
+  }
+  fapScreenEl?.addEventListener('input', onFapFieldActivity);
+  fapScreenEl?.addEventListener('change', onFapFieldActivity);
+  fapScreenEl?.addEventListener('keyup', onFapFieldActivity);
+
+  document.querySelectorAll('input[name="fapStatsPeriodMode"]').forEach((r) => {
+    r.addEventListener('change', () => {
+      updateFapPeriodModeUI();
+      if (document.getElementById('fapUseStrategyData')?.checked) applyFapStrategyPrefill();
+      scheduleFundedPlannerProjection();
+    });
+  });
+
+  document.getElementById('fapUseStrategyData')?.addEventListener('change', () => {
+    ensureFapStatsPeriodDefaults();
+    applyFapStrategyPrefill();
+    renderFundedPlannerStrategySelector();
+    scheduleFundedPlannerProjection();
+  });
+  document.getElementById('fapStrategySearch')?.addEventListener('change', updateFapSelectionFromInput);
+  document.getElementById('fapStrategySearch')?.addEventListener('blur', updateFapSelectionFromInput);
+
+  document.getElementById('propStrategySearch')?.addEventListener('change', updatePropSelectionFromInput);
+  document.getElementById('propStrategySearch')?.addEventListener('blur', updatePropSelectionFromInput);
+
+  document.getElementById('propRunPassCheckBtn')?.addEventListener('click', runHistoricalPassCheck);
+
   document.getElementById('shareGenerateBtn')?.addEventListener('click', () => {
     const periodVal = document.getElementById('sharePeriod')?.value || 'month';
     const { token } = buildSnapshotTokenForPeriod(periodVal);
@@ -4477,50 +6170,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 3500);
   }
 
-  async function runJournalSync(btnId, msgId) {
-    const msg = document.getElementById(msgId);
-    const btn = document.getElementById(btnId);
-    if (!currentUser) {
-      if (msg) msg.textContent = 'Sign in first.';
-      return;
-    }
-    if (btn) btn.disabled = true;
-    if (msg) msg.textContent = 'Syncing…';
-    try {
-      if (failedCloudWrites.length > 0) {
-        if (msg) msg.textContent = 'Retrying failed writes…';
-        await retryFailedCloudWrites();
-        if (failedCloudWrites.length > 0) {
-          if (msg) msg.textContent = 'Some changes are still pending. Check connection and try again.';
-          if (btn) btn.disabled = false;
-          return;
-        }
-      }
-      if (pendingCloudWrites.size > 0) {
-        if (msg) msg.textContent = 'Finishing cloud writes…';
-        await awaitPendingCloudWrites();
-      }
-      await applyAuthState();
-      if (msg) msg.textContent = 'Daily log updated.';
-    } catch (_) {
-      if (msg) msg.textContent = 'Could not sync. Check connection.';
-    }
-    if (btn) btn.disabled = false;
-    window.setTimeout(() => {
-      if (msg) msg.textContent = '';
-    }, 3500);
-  }
-
   document.getElementById('settingsSyncCalendarBtn')?.addEventListener('click', async () => {
     await runCalendarSync('settingsSyncCalendarBtn', 'settingsSyncCalendarMessage');
   });
 
   document.getElementById('calendarSyncNowBtn')?.addEventListener('click', async () => {
     await runCalendarSync('calendarSyncNowBtn', 'calendarSyncNowMessage');
-  });
-
-  document.getElementById('journalSyncNowBtn')?.addEventListener('click', async () => {
-    await runJournalSync('journalSyncNowBtn', 'journalSyncNowMessage');
   });
 
   const themeSelect = document.getElementById('settingsTheme');

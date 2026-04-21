@@ -25,8 +25,28 @@
       <h1 class="app-logo">Tagverse Edge</h1>
       <nav class="main-nav" aria-label="Main">
         <button type="button" class="nav-tab active" data-screen="calendar" aria-current="page">Calendar</button>
-        <button type="button" class="nav-tab" data-screen="dailylog">Daily Log</button>
         <button type="button" class="nav-tab" data-screen="analytics">Analytics</button>
+        <div class="main-nav-dropdown" id="mainNavPlanners">
+          <button
+            type="button"
+            class="nav-tab nav-tab--dropdown"
+            id="navPlannersTrigger"
+            aria-expanded="false"
+            aria-haspopup="menu"
+            aria-controls="navPlannersMenu"
+          >
+            Planners
+            <span class="nav-dropdown-chevron" aria-hidden="true">▾</span>
+          </button>
+          <div class="nav-dropdown-panel" id="navPlannersMenu" role="menu" aria-label="Planners" hidden>
+            <button type="button" class="nav-dropdown-item" role="menuitem" data-screen="proprisk">
+              Evaluation Account planner
+            </button>
+            <button type="button" class="nav-dropdown-item" role="menuitem" data-screen="fundedplanner">
+              Funded Account Planner
+            </button>
+          </div>
+        </div>
         <button type="button" class="nav-tab" data-screen="settings">Settings</button>
       </nav>
       <div class="auth-bar" aria-live="polite">
@@ -166,50 +186,7 @@
       </div>
     </div>
 
-    <!-- Daily Log: Notion-style Overview + Calendar -->
-    <main id="screen-dailylog" class="screen daily-log-screen" role="main" hidden>
-      <div class="daily-log-page">
-        <header class="daily-log-header">
-          <div class="daily-log-title-row">
-            <span class="daily-log-icon" aria-hidden="true">📁</span>
-            <div>
-              <h1 class="daily-log-title">Daily Log</h1>
-              <p class="daily-log-subtitle">Pain + Reflection = Progress. — Ray Dalio</p>
-            </div>
-          </div>
-          <div class="daily-log-toolbar">
-            <nav class="journal-view-tabs" role="tablist" aria-label="Daily log view">
-              <button type="button" class="journal-view-tab active" role="tab" aria-selected="true" data-journal-view="overview" id="journalTabOverview">Overview</button>
-              <button type="button" class="journal-view-tab" role="tab" aria-selected="false" data-journal-view="calendar" id="journalTabCalendar">Calendar</button>
-            </nav>
-            <div class="journal-view-tabs journal-actions-tabs" role="group" aria-label="Daily log actions">
-              <button type="button" class="journal-view-tab" id="journalNewEntryBtn">+ New</button>
-              <button type="button" class="journal-view-tab" id="journalSyncNowBtn">Sync now</button>
-            </div>
-            <p class="journal-sync-msg" id="journalSyncNowMessage" role="status" aria-live="polite"></p>
-          </div>
-        </header>
-
-        <section id="journalPanelOverview" class="journal-panel is-active" role="tabpanel" aria-labelledby="journalTabOverview">
-          <div id="journalGalleryGrid" class="journal-gallery" aria-label="Journal entries"></div>
-          <p id="journalEmptyOverview" class="journal-empty" hidden>No journal entries yet. Click <strong>New</strong> to add one.</p>
-        </section>
-
-        <section id="journalPanelCalendar" class="journal-panel" role="tabpanel" aria-labelledby="journalTabCalendar" hidden>
-          <div class="journal-cal-nav">
-            <button type="button" class="journal-cal-nav-btn" id="journalPrevMonth" aria-label="Previous month">&lt;</button>
-            <span class="journal-cal-month" id="journalCalMonthLabel">March 2026</span>
-            <button type="button" class="journal-cal-nav-btn" id="journalNextMonth" aria-label="Next month">&gt;</button>
-            <button type="button" class="journal-cal-today-btn" id="journalCalToday">Today</button>
-          </div>
-          <div class="journal-cal-grid-wrap">
-            <div class="journal-cal-grid" id="journalCalGrid" aria-label="Journal calendar"></div>
-          </div>
-        </section>
-      </div>
-    </main>
-
-    <!-- Journal entry: Notion-style daily trade log template -->
+    <!-- Journal entry modal (no dedicated Daily Log screen for now) -->
     <div id="journalEntryModal" class="log-modal journal-entry-modal" role="dialog" aria-label="Daily trade log" hidden>
       <div class="log-modal-backdrop" id="journalEntryModalBackdrop"></div>
       <div class="log-modal-content journal-entry-sheet">
@@ -414,7 +391,341 @@
       </div>
     </main>
 
-    <!-- Screen 4: Settings -->
+    <!-- Screen 4: Evaluation Account planner (logged period, EOD rules) -->
+    <main id="screen-proprisk" class="screen" role="main" hidden>
+      <div class="prop-risk-container planner-dashboard">
+        <header class="prop-risk-header planner-dash-header">
+          <h2 class="prop-risk-title planner-dash-title">
+            Evaluation Account planner
+          </h2>
+          <p class="prop-risk-subtitle planner-dash-subtitle">Rule fit from your logged trades for one strategy and a selected period (end-of-day only).</p>
+        </header>
+
+        <section class="prop-risk-strategy" aria-label="Strategy and period">
+          <article class="prop-risk-card">
+            <h3>Strategy &amp; period</h3>
+            <div class="prop-risk-field-grid">
+              <label>Strategy
+                <input id="propStrategySearch" type="search" list="propStrategyList" placeholder="Search strategy..." autocomplete="off" />
+                <datalist id="propStrategyList"></datalist>
+              </label>
+              <label>Start date
+                <input id="propEvalStartDate" type="date" />
+              </label>
+              <label>End date
+                <input id="propEvalEndDate" type="date" />
+              </label>
+            </div>
+            <p id="propStrategyHelperText" class="prop-risk-helper-text">Pick a strategy with calendar data and the date range to score (weekdays with logged days only).</p>
+            <div id="propEmptyNoStrategies" class="prop-empty-state" hidden>
+              <h4>No logged strategies yet</h4>
+              <p>Log trades on the calendar first, then return here.</p>
+            </div>
+            <div id="propEmptyNoSelection" class="prop-empty-state" hidden>
+              <h4>Select a strategy</h4>
+              <p>Choose a strategy that has logged days.</p>
+            </div>
+          </article>
+        </section>
+
+        <section class="prop-risk-snapshot" aria-label="Strategy snapshot">
+          <article class="prop-risk-card">
+            <h3>Strategy snapshot (all-time)</h3>
+            <div class="prop-risk-snapshot-grid">
+              <div class="prop-risk-snapshot-item"><span>Win Rate</span><strong id="propSnapshotWinRate">—</strong></div>
+              <div class="prop-risk-snapshot-item"><span>Avg R:R</span><strong id="propSnapshotRR">—</strong></div>
+              <div class="prop-risk-snapshot-item"><span>Avg Trades/Day</span><strong id="propSnapshotTradesPerDay">—</strong></div>
+              <div class="prop-risk-snapshot-item"><span>Avg Risk/Trade</span><strong id="propSnapshotRiskPerTrade">—</strong></div>
+              <div class="prop-risk-snapshot-item"><span>Total Trades</span><strong id="propSnapshotTotalTrades">—</strong></div>
+              <div class="prop-risk-snapshot-item"><span>Sample Days</span><strong id="propSnapshotSampleDays">—</strong></div>
+            </div>
+            <p id="propProvenanceText" class="prop-risk-fallback" hidden></p>
+          </article>
+        </section>
+
+        <section class="prop-risk-inputs" aria-label="Custom evaluation limits">
+          <article class="prop-risk-card">
+            <h3>Custom evaluation limits</h3>
+            <div class="prop-risk-field-grid">
+              <label>Starting balance ($)
+                <input id="propStartingBalance" type="number" min="1000" step="100" value="50000" />
+              </label>
+              <label>Profit target ($)
+                <input id="propProfitTarget" type="number" min="0" step="100" value="3000" />
+              </label>
+              <label>Max drawdown ($)
+                <input id="propMaxDrawdown" type="number" min="0" step="100" value="2500" />
+              </label>
+              <label>Minimum trading days
+                <input id="propMinTradingDays" type="number" min="1" max="500" step="1" value="10" />
+              </label>
+              <label>Dollars per 1R
+                <input id="propDollarsPerR" type="number" min="1" step="50" value="500" />
+              </label>
+              <label>Drawdown model (EOD)
+                <select id="propDrawdownType">
+                  <option value="static_drawdown">Static from starting balance</option>
+                  <option value="trailing_eod">Trailing high-water EOD</option>
+                </select>
+              </label>
+              <label class="prop-risk-checkbox-label">
+                <input id="propConsistencyEnabled" type="checkbox" />
+                <span class="prop-risk-checkbox-copy">
+                  <span class="prop-risk-checkbox-lead">Enforce consistency cap</span>
+                  <span class="prop-risk-checkbox-meta">Largest green day must not exceed a set share of total green</span>
+                </span>
+              </label>
+              <label>Consistency cap (% of total green)
+                <input id="propConsistencyCapPct" type="number" min="1" max="100" step="1" value="40" />
+              </label>
+            </div>
+          </article>
+        </section>
+
+        <div class="prop-risk-actions">
+          <button type="button" id="propRunPassCheckBtn" class="log-today-btn">Run evaluation</button>
+          <p id="propForecastMessage" class="prop-risk-inline-msg" role="status" aria-live="polite"></p>
+        </div>
+
+        <p id="propFallbackNote" class="prop-risk-fallback" hidden></p>
+
+        <section class="prop-risk-results" aria-label="Evaluation results">
+          <article class="prop-risk-card prop-risk-results-card">
+            <h3>Evaluation outcome</h3>
+            <p class="prop-outcome-badge" id="propEvalOutcome">—</p>
+            <dl class="prop-eval-dl">
+              <div><dt>Target progress</dt><dd id="propEvalTargetProgress">—</dd></div>
+              <div><dt>Profit target first hit (EOD)</dt><dd id="propEvalFirstTargetDate">—</dd></div>
+              <div><dt>All rules first pass (EOD)</dt><dd id="propEvalFirstFullPassDate">—</dd></div>
+              <div><dt>Drawdown status</dt><dd id="propEvalDrawdownStatus">—</dd></div>
+              <div><dt>Trading days</dt><dd id="propEvalTradingDays">—</dd></div>
+              <div><dt>Consistency status</dt><dd id="propEvalConsistency">—</dd></div>
+            </dl>
+            <p class="prop-eval-when-note">“Profit target first hit” is the first logged day cumulative net for the selected period reaches the target. “All rules first pass” is the first day cumulative data through that day in the period satisfies target, drawdown, minimum days, and consistency (if enabled) together.</p>
+            <h4 class="prop-eval-reason-title">Outcome reason</h4>
+            <p id="propEvalOutcomeReason" class="prop-eval-reason">Run evaluation to compare your logged period to these limits.</p>
+          </article>
+        </section>
+
+        <p class="prop-risk-disclaimer">
+          Based on logged calendar outcomes only. Uses end-of-day rule checks; intraday breaches are not modelled.
+        </p>
+      </div>
+    </main>
+
+    <!-- Funded Account Planner: forward-looking scenario (not historical pass check) -->
+    <main id="screen-fundedplanner" class="screen" role="main" hidden>
+      <div class="prop-risk-container planner-dashboard">
+        <header class="prop-risk-header planner-dash-header">
+          <h2 class="prop-risk-title planner-dash-title">
+            Funded Account Planner
+          </h2>
+          <p class="prop-risk-subtitle planner-dash-subtitle">Projected earnings and simplified risk from <strong>your inputs</strong> — not your calendar history unless you prefill from a strategy. For rules vs logged history, use <strong>Evaluation Account planner</strong>.</p>
+        </header>
+
+        <section class="prop-risk-strategy" aria-label="Planner inputs">
+          <article class="prop-risk-card">
+            <h3>Inputs</h3>
+            <div class="prop-risk-field-grid">
+              <label>Number of accounts
+                <input id="fapNumAccounts" type="number" min="1" max="500" step="1" value="3" />
+              </label>
+              <label>Risk per trade ($)
+                <input id="fapRiskPerTrade" type="number" min="1" step="50" value="500" />
+              </label>
+              <label>Trades per day
+                <input id="fapTradesPerDay" type="number" min="0" step="0.25" value="2" />
+              </label>
+              <label>Win rate (%)
+                <input id="fapWinRate" type="number" min="1" max="99" step="0.1" value="55" />
+              </label>
+              <label>Risk : reward (avg win ÷ avg loss)
+                <input id="fapRiskReward" type="number" min="0" step="0.05" value="1.5" />
+              </label>
+              <label>Trading days per month
+                <input id="fapTradingDaysPerMonth" type="number" min="1" max="31" step="1" value="20" />
+              </label>
+              <label>Drawdown limit ($) <span class="fap-input-hint">max loss before rule breach</span>
+                <input id="fapMaxDrawdown" type="number" min="1" step="100" value="2500" />
+              </label>
+              <label class="prop-risk-checkbox-label">
+                <input id="fapUseStrategyData" type="checkbox" checked />
+                Prefill win rate, R:R, and trades/day from a logged strategy
+              </label>
+              <label>Strategy <span class="fap-input-hint">when prefill is on</span>
+                <input id="fapStrategySearch" type="search" list="fapStrategyList" placeholder="Search strategy…" autocomplete="off" />
+                <datalist id="fapStrategyList"></datalist>
+              </label>
+
+              <div class="fap-stats-period" id="fapStatsPeriodBlock" aria-label="Period for strategy stats">
+                <p class="fap-stats-period-title">Period for strategy stats</p>
+                <p class="fap-stats-period-lead">Used when prefill is on — calendar month or custom start/end (weekdays with logs only).</p>
+                <div class="fap-period-mode" role="radiogroup" aria-label="Stats period type">
+                  <label class="fap-period-radio">
+                    <input type="radio" name="fapStatsPeriodMode" value="month" checked />
+                    Calendar month
+                  </label>
+                  <label class="fap-period-radio">
+                    <input type="radio" name="fapStatsPeriodMode" value="custom" />
+                    Custom range
+                  </label>
+                </div>
+                <div id="fapStatsMonthWrap" class="fap-period-fields fap-period-fields--month">
+                  <label>Month
+                    <input id="fapStatsMonth" type="month" />
+                  </label>
+                </div>
+                <div id="fapStatsCustomWrap" class="fap-period-fields fap-period-fields--custom" hidden>
+                  <label>Start date
+                    <input id="fapStatsStartDate" type="date" />
+                  </label>
+                  <label>End date
+                    <input id="fapStatsEndDate" type="date" />
+                  </label>
+                </div>
+              </div>
+            </div>
+            <p id="fapPrefillHint" class="prop-risk-helper-text" hidden></p>
+            <div id="fapEmptyNoStrategies" class="prop-empty-state" hidden>
+              <h4>No strategies with calendar data</h4>
+              <p>Log trades first, or enter assumptions manually.</p>
+            </div>
+          </article>
+        </section>
+
+        <div class="prop-risk-actions">
+          <button type="button" id="fapRunBtn" class="log-today-btn">Update projection</button>
+          <p id="fapInlineMsg" class="prop-risk-inline-msg" role="status" aria-live="polite"></p>
+        </div>
+
+        <section class="fap-earn-section" aria-label="Earnings projection">
+          <div class="fap-section-head">
+            <h3>Earnings projection</h3>
+            <p class="fap-section-lead">Estimated from your inputs — not a promise of results.</p>
+          </div>
+          <div class="fap-earn-grid">
+            <article class="fap-kpi-card fap-kpi-card--profit">
+              <span class="fap-kpi-label">Each account (monthly)</span>
+              <p class="fap-kpi-value" id="fapOutProfitPerAccount">—</p>
+              <span class="fap-kpi-hint">Does not change when you add accounts — same edge per seat.</span>
+            </article>
+            <article class="fap-kpi-card fap-kpi-card--total">
+              <span class="fap-kpi-label">All accounts combined (monthly)</span>
+              <p class="fap-kpi-value" id="fapOutTotalProfit">—</p>
+            </article>
+          </div>
+          <p class="fap-kpi-meta" id="fapEarningsMeta">Estimated from your win rate, dollars at risk per trade, and how often you trade.</p>
+        </section>
+
+        <section class="fap-dash" aria-label="Risk and survival">
+          <div class="fap-section-head">
+            <h3>Risk &amp; survival</h3>
+            <p class="fap-section-lead">Size vs drawdown at a glance — still estimates only.</p>
+          </div>
+
+          <div class="fap-hero-grid">
+            <article class="fap-metric-card" id="fapHeroRiskCard">
+              <span class="fap-metric-tag" id="fapHeroRiskTag">—</span>
+              <p class="fap-metric-value" id="fapHeroRiskPct">—</p>
+              <p class="fap-metric-sub">of your drawdown limit each trade</p>
+            </article>
+            <article class="fap-metric-card fap-metric-card--blow">
+              <span class="fap-metric-tag fap-metric-tag--muted">Drawdown line</span>
+              <p class="fap-metric-value" id="fapHeroBlowValue">—</p>
+              <p class="fap-metric-sub" id="fapHeroBlowSub">straight losses to use your max drawdown</p>
+            </article>
+            <article class="fap-metric-card fap-metric-card--rec">
+              <span class="fap-metric-tag fap-metric-tag--muted">Suggested size</span>
+              <p class="fap-metric-value" id="fapHeroRecValue">—</p>
+              <p class="fap-metric-sub" id="fapHeroRecSub">risk per trade at 4% of drawdown</p>
+            </article>
+          </div>
+
+          <div class="fap-guide" aria-label="Risk guide">
+            <p class="fap-guide-title">Guide · risk per trade (of drawdown limit)</p>
+            <ul class="fap-guide-legend">
+              <li><span class="fap-guide-dot fap-guide-dot--safe"></span> ≤ 4% · steady</li>
+              <li><span class="fap-guide-dot fap-guide-dot--caution"></span> 4–8% · watch size</li>
+              <li><span class="fap-guide-dot fap-guide-dot--warn"></span> 8–12% · hot</li>
+              <li><span class="fap-guide-dot fap-guide-dot--extreme"></span> &gt; 12% · very hot</li>
+            </ul>
+          </div>
+
+          <div class="fap-secondary-grid">
+            <article class="fap-secondary-card">
+              <span class="fap-secondary-label">Rough patch (from your win rate)</span>
+              <p class="fap-secondary-value" id="fapOutWorstRunHeadline">—</p>
+              <p class="fap-secondary-note" id="fapOutWorstRunDollars">—</p>
+              <p class="fap-secondary-hint" id="fapOutWorstRunExplain">A “what if” losing streak — not a forecast.</p>
+            </article>
+            <article class="fap-secondary-card">
+              <span class="fap-secondary-label">Drawdown room used</span>
+              <p class="fap-secondary-value" id="fapOutDdPressureLine">—</p>
+              <p class="fap-secondary-note" id="fapOutDdPressureInterpret">—</p>
+            </article>
+            <article class="fap-secondary-card">
+              <span class="fap-secondary-label">Overall risk level</span>
+              <p class="fap-secondary-row">
+                <span id="fapRiskIndicator" class="fap-risk-indicator fap-risk-indicator--moderate"></span>
+                <strong id="fapRiskLevelValue" class="fap-secondary-strong">—</strong>
+              </p>
+              <p class="fap-secondary-hint" id="fapRiskLevelHelp">—</p>
+            </article>
+            <article class="fap-secondary-card">
+              <span class="fap-secondary-label">Accounts at risk</span>
+              <p class="fap-secondary-value" id="fapOutAccountsLine">—</p>
+              <p class="fap-secondary-hint" id="fapOutAccountsExplain">Based on this setup.</p>
+            </article>
+            <article class="fap-secondary-card fap-secondary-card--wide">
+              <span class="fap-secondary-label">Survival outlook</span>
+              <p id="fapOutSurvivalOutlook" class="fap-survival-outlook">—</p>
+              <p class="fap-secondary-hint" id="fapOutSurvivalExplain">—</p>
+            </article>
+          </div>
+
+          <div class="fap-prob-block">
+            <h4 class="fap-prob-heading">Losing streak odds (your win rate)</h4>
+            <p class="fap-prob-winrate" id="fapProbWinRateLine">—</p>
+            <p class="fap-prob-caption" id="fapProbCaption">—</p>
+            <div class="fap-prob-grid fap-prob-grid--streaks">
+              <div class="fap-prob-card" id="fapProbCardLoss5" data-streak="5">
+                <span class="fap-prob-label">5 losses in a row</span>
+                <span class="fap-prob-value" id="fapProbValLoss5">—</span>
+              </div>
+              <div class="fap-prob-card" id="fapProbCardLoss10" data-streak="10">
+                <span class="fap-prob-label">10 losses in a row</span>
+                <span class="fap-prob-value" id="fapProbValLoss10">—</span>
+              </div>
+              <div class="fap-prob-card" id="fapProbCardLoss15" data-streak="15">
+                <span class="fap-prob-label">15 losses in a row</span>
+                <span class="fap-prob-value" id="fapProbValLoss15">—</span>
+              </div>
+              <div class="fap-prob-card" id="fapProbCardLoss20" data-streak="20">
+                <span class="fap-prob-label">20 losses in a row</span>
+                <span class="fap-prob-value" id="fapProbValLoss20">—</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="prop-risk-results" aria-label="Notes and disclaimer">
+          <article class="prop-risk-card">
+            <h3>Notes</h3>
+            <ul class="fap-notes-list">
+              <li>Estimates assume your strategy performs in line with the numbers you entered.</li>
+              <li>Results follow from your inputs, not live market conditions.</li>
+              <li>Short-term volatility can still cause losses even when the long view looks fine.</li>
+              <li>Intraday rules and same-day loss limits are not included here.</li>
+            </ul>
+            <p class="prop-risk-disclaimer fap-disclaimer">
+              Estimates are based on user inputs and simplified assumptions. Actual performance may vary due to market conditions and execution.
+            </p>
+          </article>
+        </section>
+      </div>
+    </main>
+
+    <!-- Screen 5: Settings -->
     <main id="screen-settings" class="screen screen-settings" role="main" hidden>
       <div class="settings-layout">
         <header class="settings-page-head">
